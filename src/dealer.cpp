@@ -15,7 +15,6 @@ Dealer::PDealFunc Dealer::m_func[ENUM_DEAL_END] = {
     &Dealer::procMsg,
     &Dealer::procConnector,
     &Dealer::procListener,
-    &Dealer::procTimer,
 };
 
 Dealer::Dealer(ManageCenter* center, Director* director) {
@@ -28,6 +27,7 @@ Dealer::Dealer(ManageCenter* center, Director* director) {
     initList(&m_cmd_queue);
 
     m_busy = false;
+    m_tick = 0;
 }
 
 Dealer::~Dealer() {
@@ -69,6 +69,7 @@ void Dealer::run() {
 }
 
 void Dealer::doTasks() {
+    unsigned tick = 0;
     LList runlist = INIT_LIST(runlist);
     LList cmdlist = INIT_LIST(cmdlist);
     bool action = false;
@@ -84,6 +85,12 @@ void Dealer::doTasks() {
         action = true;
     }
 
+    if (0 < m_tick) {
+        tick = m_tick;
+        m_tick = 0;
+        action = true;
+    }
+
     if (!action) {
         m_busy = false;
         wait();
@@ -93,6 +100,10 @@ void Dealer::doTasks() {
     if (action) {
         if (!isEmpty(&runlist)) { 
             dealRunQue(&runlist);
+        }
+
+        if (0 < tick) {
+            m_timer->run(tick);
         }
 
         if (!isEmpty(&cmdlist)) { 
@@ -121,19 +132,11 @@ void Dealer::setStat(GenData* data, int stat) {
     m_center->setStat(ENUM_DIR_DEALER, data, stat); 
 }
 
-void Dealer::lockSet(GenData* data, int stat) {
+int Dealer::notifyTimer(unsigned tick) {
     lock();
-    setStat(data, stat);
-    unlock();
-}
-
-int Dealer::notifyTimer(GenData* data, unsigned tick) {
-    bool action = false;
-    
-    lock();
-    data->m_deal_tick += tick;
-    action = _queue(data, ENUM_STAT_IDLE); 
-    if (action) {
+    m_tick += tick;
+    if (!m_busy) {
+        m_busy = true;
         signal();
     } 
     
@@ -154,11 +157,11 @@ int Dealer::addCmd(NodeCmd* pCmd) {
     return 0;
 }
 
-int Dealer::_activate(GenData* data, int expectStat) {
+int Dealer::activate(GenData* data) {
     bool action = false;
 
     lock(); 
-    action = _queue(data, expectStat); 
+    action = _queue(data, ENUM_STAT_DISABLE); 
     if (action) {
         signal();
     }
@@ -167,25 +170,39 @@ int Dealer::_activate(GenData* data, int expectStat) {
     return 0;
 }
 
-int Dealer::activate(GenData* data) {
-    int ret = 0;
+void Dealer::detach(GenData* data, int stat) {
+    lock();
+    setStat(data, stat);
+    m_center->delNode(ENUM_DIR_DEALER, data); 
+    unlock();
+}
 
-    ret = _activate(data, ENUM_STAT_DISABLE);
-    return ret;
+int Dealer::requeue(GenData* data) {
+    bool action = false;
+
+    lock();
+    action = _queue(data, ENUM_STAT_READY); 
+    if (action) {
+        signal();
+    }
+    unlock();
+    
+    return 0;
 }
 
 bool Dealer::_queue(GenData* data, int expectStat) {
     bool action = false;
+    int stat = m_center->getStat(ENUM_DIR_DEALER, data);
 
-    if (expectStat == data->m_deal_stat) {
-        data->m_deal_stat = ENUM_STAT_READY;
+    if (expectStat == stat) {
+        setStat(data, ENUM_STAT_READY);
 
         if (!m_busy) {
             m_busy = true;
             action = true;
         }
         
-        add(&m_run_queue, &data->m_deal_node);
+        m_center->addNode(ENUM_DIR_DEALER, &m_run_queue, data);
     }
 
     return action;
@@ -193,17 +210,24 @@ bool Dealer::_queue(GenData* data, int expectStat) {
 
 int Dealer::dispatch(int fd, NodeMsg* pMsg) {
     bool action = false;
-    GenData* data = find(fd); 
-    
-    lock(); 
-    MsgUtil::addNodeMsg(&data->m_deal_msg_que, pMsg);
-    action = _queue(data, ENUM_STAT_IDLE);
-    if (action) {
-        signal();
+    GenData* data = find(fd);
+
+    LOG_DEBUG("fd=%d| msg=dispatch msg|", fd);
+
+    if (!m_center->isClosed(data)) {
+        lock(); 
+        m_center->addMsg(ENUM_DIR_DEALER, data, pMsg);
+        action = _queue(data, ENUM_STAT_IDLE);
+        if (action) {
+            signal();
+        }
+        
+        unlock(); 
+        return 0;
+    } else {
+        MsgUtil::freeNodeMsg(pMsg);
+        return -1;
     }
-    
-    unlock(); 
-    return 0;
 }
 
 void Dealer::dealCmds(LList* list) {
@@ -226,44 +250,32 @@ void Dealer::dealRunQue(LList* list) {
     LList* n = NULL;
 
     for_each_list_safe(node, n, list) {
-        data = CONTAINER(node, GenData, m_deal_node); 
+        data = m_center->fromNode(ENUM_DIR_DEALER, node);
 
-        del(&data->m_deal_node); 
+        m_center->delNode(ENUM_DIR_DEALER, data);
         callback(data);
     }
 }
 
 void Dealer::callback(GenData* data) {
-    if (0 <= data->m_deal_cb && ENUM_DEAL_END > data->m_deal_cb) {
-        (this->*(m_func[data->m_deal_cb]))(data); 
+    int cb = m_center->getCb(ENUM_DIR_DEALER, data);
+    
+    if (0 <= cb && ENUM_DEAL_END > cb) {
+        (this->*(m_func[cb]))(data); 
     } else {
         (this->*(m_func[ENUM_DEAL_DEFAULT]))(data); 
     }
 }
 
 void Dealer::procDefault(GenData* data) {
-    int fd = data->m_fd;
-
-    LOG_INFO("fd=%d| stat=%d| cb=%d| invalid deal data", 
-        fd, data->m_deal_stat, data->m_deal_cb);
+    LOG_INFO("fd=%d| stat=%d| cb=%d| msg=invalid deal cb|", 
+        m_center->getFd(data), 
+        m_center->getStat(ENUM_DIR_DEALER, data),
+        m_center->getCb(ENUM_DIR_DEALER, data));
     
-    lockSet(data, ENUM_STAT_ERROR);
+    detach(data, ENUM_STAT_ERROR); 
     
     m_director->notifyClose(data);
-}
-
-void Dealer::procTimer(GenData* data) {
-    unsigned tick = 0;
-
-    lock();
-    tick = data->m_deal_tick;
-    data->m_deal_tick = 0; 
-    setStat(data, ENUM_STAT_IDLE);
-    unlock();
-
-    if (0 < tick) {
-        m_timer->run(tick);
-    }
 }
 
 void Dealer::procMsg(GenData* data) { 
@@ -273,11 +285,11 @@ void Dealer::procMsg(GenData* data) {
     LList runlist = INIT_LIST(runlist); 
 
     lock(); 
-    if (!isEmpty(&data->m_deal_msg_que)) {
-        append(&runlist, &data->m_deal_msg_que);
-    }
+    m_center->appendQue(ENUM_DIR_DEALER, &runlist, data);
     
-    setStat(data, ENUM_STAT_IDLE);
+    if (isEmpty(&runlist)) {
+        setStat(data, ENUM_STAT_IDLE);
+    }
     unlock();
 
     if (!isEmpty(&runlist)) {
@@ -287,14 +299,21 @@ void Dealer::procMsg(GenData* data) {
             del(node);
 
             if (0 == ret) {
-                ret = m_director->onProcess(data, base);
+                ret = m_center->onProcess(data, base);
             }
             
             MsgUtil::freeNodeMsg(base);
         }
 
-        if (0 != ret) {
-            procDefault(data);
+        if (0 == ret) {
+            requeue(data);
+        } else {
+            LOG_INFO("proc_msgs| fd=%d| ret=%d| msg=deal close|", 
+                m_center->getFd(data), ret);
+            
+            detach(data, ENUM_STAT_ERROR); 
+    
+            m_director->notifyClose(data);
         }
     }
 }
@@ -304,6 +323,10 @@ void Dealer::procCmd(NodeCmd* pCmd) {
 
     pHead = MsgUtil::getCmd(pCmd);
     switch (pHead->m_cmd) {
+    case ENUM_CMD_CLOSE_FD:
+        cmdCloseFd(pCmd);
+        break;
+        
     case ENUM_CMD_REMOVE_FD:
         cmdRemoveFd(pCmd);
         break;
@@ -318,9 +341,47 @@ void Dealer::procCmd(NodeCmd* pCmd) {
 }
 
 void Dealer::procConnector(GenData* data) {
-    int result = data->m_wr_conn;
+    int fd = m_center->getFd(data);
+    int ret = 0;
 
-    m_director->onConnect(data, result);
+    ret = m_center->onConnect(data);
+    if (0 == ret) {
+        /* reset to write */
+        m_director->initSock(data);
+        m_center->setIdleTimeout(data); 
+        
+        activate(data);
+        m_director->sendCommCmd(ENUM_DIR_SENDER, ENUM_CMD_ADD_FD, fd);
+        m_director->sendCommCmd(ENUM_DIR_RECVER, ENUM_CMD_ADD_FD, fd); 
+    } else {
+        m_director->closeData(data);
+    } 
+}
+
+void Dealer::onAccept(GenData* listenData,
+    int newFd, const char ip[], int port) {
+    GenData* childData = NULL;
+    int ret = 0;
+
+    childData = m_center->reg(newFd);
+    if (NULL != childData) { 
+        ret = m_center->onNewSock(listenData, newFd);
+        if (0 == ret) {
+            m_director->initSock(childData); 
+            m_center->refData(childData, listenData); 
+            m_center->setIdleTimeout(childData);
+            m_center->setAddr(childData, ip, port);
+
+            /* start all */
+            activate(childData);
+            m_director->sendCommCmd(ENUM_DIR_SENDER, ENUM_CMD_ADD_FD, newFd);
+            m_director->sendCommCmd(ENUM_DIR_RECVER, ENUM_CMD_ADD_FD, newFd); 
+        } else {
+            m_director->closeData(childData);
+        }
+    } else {
+        SockTool::closeSock(newFd);
+    }
 }
 
 void Dealer::procListener(GenData* listenData) {
@@ -332,16 +393,44 @@ void Dealer::procListener(GenData* listenData) {
     do {
         ret = SockTool::acceptSock(listenFd, &newFd, &param); 
         if (0 < ret) {
-            m_director->onAccept(listenData, newFd, 
+            onAccept(listenData, newFd, 
                 param.m_ip, param.m_port); 
         } 
     } while (0 < ret);
 
     if (0 <= ret) {
-        lockSet(listenData, ENUM_STAT_DISABLE);
+        setStat(listenData, ENUM_STAT_DISABLE);
         m_director->activate(ENUM_DIR_RECVER, listenData);
     } else { 
-        procDefault(listenData);
+        LOG_INFO("deal_listener| fd=%d| ret=%d| msg=deal close|", 
+                listenFd, ret);
+        
+        detach(listenData, ENUM_STAT_ERROR); 
+    
+        m_director->notifyClose(listenData);
+    }
+}
+
+void Dealer::cmdCloseFd(NodeCmd* base) { 
+    int fd = -1;
+    bool action = false;
+    CmdComm* pCmd = NULL;
+    GenData* data = NULL;
+
+    pCmd = MsgUtil::getCmdBody<CmdComm>(base);
+    fd = pCmd->m_fd; 
+    
+    if (exists(fd)) { 
+        data = find(fd);
+
+        action = m_center->markClosed(data); 
+        if (action) {
+            LOG_INFO("cmd_close_fd| fd=%d| msg=closing|", fd);
+            
+            m_director->sendCommCmd(ENUM_DIR_RECVER, ENUM_CMD_REMOVE_FD, fd);
+        }
+    } else {
+        LOG_INFO("cmd_close_fd| fd=%d| msg=not exists|", fd);
     }
 }
 
@@ -356,16 +445,12 @@ void Dealer::cmdRemoveFd(NodeCmd* base) {
     LOG_INFO("dealer_remove_fd| fd=%d|", fd);
     
     if (exists(fd)) { 
-        data = find(fd);
+        data = find(fd); 
 
-        lock();
-        setStat(data, ENUM_STAT_INVALID);
-        
-        /* delete from run que if in */
-        del(&data->m_deal_node); 
-        unlock();
+        detach(data, ENUM_STAT_INVALID); 
 
-        m_director->onClose(data);
+        m_center->onClose(data);
+        m_director->closeData(data);
     }
 }
 

@@ -31,9 +31,12 @@ public:
 
     static unsigned long long read8Bytes(int fd);
     static void writeEvent(int fd);
+    static void writePipeEvent(int fd);
+    static void readPipeEvent(int fd);
 
     static int creatEvent();
     static int creatTimer(int ms);
+    static int creatPipes(int (*)[2]);
 };
 
 

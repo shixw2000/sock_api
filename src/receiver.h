@@ -44,13 +44,13 @@ private:
     void signal(); 
     
     void setStat(GenData* data, int stat);
-    void lockSet(GenData* data, int stat);
     void _disableFd(GenData* data);
     void _enableFd(GenData* data);
     
     bool queue(GenData* data);
     bool _queue(GenData* data, int expectStat);
-    int _activate(GenData* data, int expectStat);
+    int _activate(GenData* data, int stat);
+    void detach(GenData* data, int stat);
 
     void dealFlashTimeout(unsigned now, LList* list);
     void addFlashTimeout(unsigned now, 
@@ -61,22 +61,17 @@ private:
     void readDefault(GenData* data);
     void readSock(GenData* data);
     void readListener(GenData* data);
-    void readTimer(GenData* data);
 
     void dealCmds(LList* list); 
     void procCmd(NodeCmd* base);
     void cmdAddFd(NodeCmd* base);
     void cmdRemoveFd(NodeCmd* base);
 
-    void updateBytes(GenData* data, unsigned now);
     void flowCtl(GenData* data, unsigned total);
 
     void cbTimer1Sec();
     void startTimer1Sec();
     static void Recv1SecCb(long data1, long);
-
-    void postSendData(unsigned now, GenData* data,
-        int stat, unsigned max, unsigned total);
 
 private:
     static PRdFunc m_func[ENUM_RD_END];
@@ -84,6 +79,7 @@ private:
     LList m_cmd_queue;
     LList m_time_flash_queue;
     bool m_busy;
+    unsigned m_tick;
     Lock* m_lock;
     struct pollfd* m_pfds;
     ManageCenter* m_center;
@@ -91,7 +87,8 @@ private:
     TickTimer* m_timer;
     TimerObj* m_1sec_obj;
     int m_size;
-    int m_ev_fd;
+    int m_ev_fd[2];
+    int m_timer_fd; 
 };
 
 

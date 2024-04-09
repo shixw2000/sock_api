@@ -1,8 +1,18 @@
 #ifndef __ISOCKAPI_H__
 #define __ISOCKAPI_H__
 #include"shareheader.h" 
-#include"isockmsg.h"
 
+
+struct NodeMsg;
+
+/* the min head size used by protocol user */
+static const int MAX_MSG_HEAD_SIZE = 32; 
+
+struct SockBuffer {
+    NodeMsg* m_msg; 
+    unsigned m_pos;
+    char m_head[MAX_MSG_HEAD_SIZE];
+};
 
 class SockProto {
 public: 

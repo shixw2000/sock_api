@@ -161,6 +161,36 @@ void MiscTool::writeEvent(int fd) {
     write(fd, &ullVal, sizeof(ullVal));
 }
 
+void MiscTool::writePipeEvent(int fd) {
+    int wrLen = 0;
+    unsigned char ch = 0;
+
+    wrLen = write(fd, &ch, sizeof(ch));
+    if (0 < wrLen || (0 > wrLen && EAGAIN == errno)) {
+    } else {
+        LOG_ERROR("write_pipe| ret=%d| fd=%d| error=%s|",
+            wrLen, fd, strerror(errno));
+    }
+}
+
+void MiscTool::readPipeEvent(int fd) {
+    unsigned char ch[8] = {0};
+    int rdLen = 0;
+
+    rdLen = read(fd, ch, sizeof(ch));
+    if (0 < rdLen || (0 > rdLen && EAGAIN == errno)) {
+        /* ok */
+    } else if (0 == rdLen) {
+        /* closed write */
+        LOG_ERROR("read_pipe| ret=%d| fd=%d| error=closed|",
+            rdLen, fd);
+    } else {
+        /* error */
+        LOG_ERROR("read_pipe| ret=%d| fd=%d| error=%s|",
+            rdLen, fd, strerror(errno));
+    }
+}
+
 int MiscTool::creatEvent() {
     int fd = -1; 
 
@@ -200,6 +230,23 @@ int MiscTool::creatTimer(int ms) {
         close(fd);
         return -1;
     } 
+}
+
+int MiscTool::creatPipes(int (*pfds)[2]) {
+    int ret = 0;
+
+    memset(pfds, 0, sizeof(*pfds));
+    ret = pipe(*pfds);
+    if (0 == ret) {
+        fcntl((*pfds)[0], F_SETFL, O_NONBLOCK);
+        fcntl((*pfds)[1], F_SETFL, O_NONBLOCK);
+    } else {
+        LOG_ERROR("creat_pipes| ret=%d| error=%s|",
+            ret, strerror(errno));
+        ret = -1;
+    }
+
+    return ret;
 }
 
 int SockTool::creatSock() {

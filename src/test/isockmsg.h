@@ -20,13 +20,6 @@ struct MsgHead_t {
 
 static const int DEF_MSG_HEAD_SIZE = sizeof(MsgHead_t);
 
-struct NodeMsg;
-
-struct SockBuffer {
-    NodeMsg* m_msg; 
-    unsigned m_pos;
-    char m_head[DEF_MSG_HEAD_SIZE];
-};
 
 #endif
 

@@ -31,8 +31,8 @@ public:
     void flowCtlCallback(GenData* data);
     void flowCtl(GenData* data, unsigned total);
 
+    int notifyTimer(unsigned tick); 
     int activate(GenData* data);
-    int notifyTimer(GenData* data, unsigned tick); 
 
 private:
     void run();
@@ -47,24 +47,21 @@ private:
     void signal();
 
     void setStat(GenData* data, int stat);
-    void lockSet(GenData* data, int stat);
+
     bool queue(GenData* data);
     bool _queue(GenData* data, int expectStat);
-    int _activate(GenData* data, int expectStat);
+    int _activate(GenData* data, int stat);
+    void detach(GenData* data, int stat);
 
-    bool creatEvent();
-    void readEvent(int fd);
-
+    void dealFlashConn(unsigned now, LList* list);
     void dealFlashTimeout(unsigned now, LList* list);
-    void addFlashTimeout(unsigned now, 
-        LList* list, GenData* data);
+    void addFlash(unsigned now, LList* list, GenData* data);
     
     void dealRunQue(LList* list);
     void callback(GenData* data);
     void writeDefault(GenData* data);
     void writeSock(GenData* data);
     void writeConnector(GenData* data); 
-    void writeTimer(GenData* data);
 
     void dealCmds(LList* list); 
     void procCmd(NodeCmd* base);
@@ -75,8 +72,8 @@ private:
     void startTimer1Sec();
     static void Send1SecCb(long data1, long);
 
-    void postSendData(unsigned now, GenData* data,
-        int stat, unsigned max, unsigned total);
+    void writeMsgQue(GenData* data, LList* queue,
+        unsigned now, unsigned max);
 
 private:
     static PWrFunc m_func[ENUM_WR_END];
@@ -84,14 +81,16 @@ private:
     LList m_wait_queue;
     LList m_cmd_queue;
     LList m_time_flash_queue;
+    LList m_time_flash_conn;
     bool m_busy;
+    unsigned m_tick;
     Lock* m_lock;
     struct pollfd* m_pfds;
     ManageCenter* m_center;
     Director* m_director;
     TickTimer* m_timer;
     TimerObj* m_1sec_obj;
-    int m_ev_fd;
+    int m_ev_fd[2];
 };
 
 #endif

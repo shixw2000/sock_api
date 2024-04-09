@@ -48,7 +48,7 @@ public:
     static void freeNodeMsg(NodeMsg* pb);
 
     static char* getMsg(const NodeMsg* pb); 
-    static void copyMsg(NodeMsg* pb, const void* buf, int len);
+    static void setMsgSize(NodeMsg* pb, int size);
     static int getMsgSize(const NodeMsg* pb); 
     static int getMsgPos(const NodeMsg* pb);
     static void setMsgPos(NodeMsg* pb, int pos);
@@ -60,8 +60,6 @@ public:
     static void addNodeMsg(LList* root, NodeMsg* pb); 
     static NodeMsg* refNodeMsg(NodeMsg* pb);
 
-    static void initBuffer(SockBuffer* buffer);
-    static void freeBuffer(SockBuffer* buffer);
 
 private:
     static int _alignment(int size);

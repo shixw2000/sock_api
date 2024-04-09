@@ -2,7 +2,6 @@
 #include<cstdlib>
 #include"shareheader.h"
 #include"msgutil.h"
-#include"isockmsg.h"
 
 
 struct GenCmd_t {
@@ -17,7 +16,7 @@ struct NodeCmd {
 } __attribute__((aligned(8)));
 
 struct GenMsg_t {
-    int m_size;
+    int m_capacity; 
     int m_ref_cnt;
     char m_body[0];
 } __attribute__((aligned(8)));
@@ -25,6 +24,7 @@ struct GenMsg_t {
 struct NodeMsg {
     LList m_list;
     GenMsg_t* m_head;
+    int m_size;
     int m_pos;
 } __attribute__((aligned(8)));
 
@@ -125,9 +125,7 @@ CmdHead_t* MsgUtil::getCmd(const NodeCmd* pb) {
 
 bool MsgUtil::completedMsg(NodeMsg* pb) {
     if (NULL != pb) {
-        GenMsg_t* data = pb->m_head;
-
-        return data->m_size == pb->m_pos;
+        return pb->m_size == pb->m_pos;
     } else {
         return false;
     }
@@ -145,8 +143,10 @@ NodeMsg* MsgUtil::creatNodeMsg(int size) {
 
     initList(&pb->m_list); 
     pb->m_head = ph;
+    pb->m_size = size;
+    pb->m_pos = 0;
     
-    ph->m_size = size;
+    ph->m_capacity = size;
     ph->m_ref_cnt = 1;
 
     return pb;
@@ -188,6 +188,8 @@ NodeMsg* MsgUtil::refNodeMsg(NodeMsg* pb) {
 
         std::memset(base, 0, total);
         initList(&base->m_list); 
+        base->m_size = pb->m_size;
+        base->m_pos = 0;
         base->m_head = ph;
         
         return base;
@@ -212,12 +214,12 @@ char* MsgUtil::getMsg(const NodeMsg* pb) {
     return pb->m_head->m_body;
 }
 
-void MsgUtil::copyMsg(NodeMsg* pb, const void* buf, int len) {
-    memcpy(pb->m_head->m_body, buf, len);
+void MsgUtil::setMsgSize(NodeMsg* pb, int size) {
+    pb->m_size = size;
 }
 
 int MsgUtil::getMsgSize(const NodeMsg* pb) {
-    return pb->m_head->m_size;
+    return pb->m_size;
 }
 
 int MsgUtil::getMsgPos(const NodeMsg* pb) {
@@ -230,16 +232,5 @@ void MsgUtil::setMsgPos(NodeMsg* pb, int pos) {
 
 void MsgUtil::skipMsgPos(NodeMsg* pb, int pos) {
     pb->m_pos += pos;
-}
-
-void MsgUtil::initBuffer(SockBuffer* buffer) {
-    memset(buffer, 0, sizeof(SockBuffer));
-}
-
-void MsgUtil::freeBuffer(SockBuffer* buffer) {
-    if (NULL != buffer->m_msg) {
-        MsgUtil::freeNodeMsg(buffer->m_msg);
-        buffer->m_msg = NULL;
-    }
 }
 

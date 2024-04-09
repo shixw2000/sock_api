@@ -25,7 +25,7 @@ public:
     int addCmd(NodeCmd* pCmd);
     int dispatch(int fd, NodeMsg* pMsg);
     int activate(GenData* data); 
-    int notifyTimer(GenData* data, unsigned tick);
+    int notifyTimer(unsigned tick);
 
 private:
     void run();
@@ -39,9 +39,9 @@ private:
     void signal();
 
     void setStat(GenData* data, int stat);
-    void lockSet(GenData* data, int stat);
     bool _queue(GenData* data, int expectStat);
-    int _activate(GenData* data, int expectStat);
+    int requeue(GenData* data);
+    void detach(GenData* data, int stat);
 
     void dealRunQue(LList* list);
     void callback(GenData* data);
@@ -49,19 +49,22 @@ private:
     void procMsg(GenData* data);
     void procConnector(GenData* data);
     void procListener(GenData* listenData);
-    void procTimer(GenData* data);
     
     void dealCmds(LList* list); 
     void procCmd(NodeCmd* base);
     void cmdRemoveFd(NodeCmd* base); 
-    void cmdConnReport(NodeCmd* base);
+    void cmdCloseFd(NodeCmd* base);
     void cmdSchedTask(NodeCmd* base);
+
+    void onAccept(GenData* listenData,
+        int newFd, const char ip[], int port);
 
 private:
     static PDealFunc m_func[ENUM_DEAL_END];
     LList m_run_queue;
     LList m_cmd_queue;
     bool m_busy;
+    unsigned m_tick;
     MutexCond* m_lock;
     ManageCenter* m_center;
     Director* m_director;

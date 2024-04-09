@@ -45,42 +45,29 @@ public:
     int dispatch(int fd, NodeMsg* pMsg); 
     
     int activate(EnumDir enDir, GenData* data);
-    int notifyTimer(EnumDir enDir, GenData* data, unsigned tick); 
+    int notifyTimer(EnumDir enDir, unsigned tick); 
     void notifyClose(GenData* data);
     void notifyClose(int fd);
      
-    void modCli(GenData* data); 
-
     void setProto(SockProto* proto); 
 
-    void onConnect(GenData* data, int result);
-    void onAccept(GenData* listenData,
-        int newFd, const char ip[], int port);
-
-    int onProcess(GenData* data, NodeMsg* pMsg);
-    void onClose(GenData* data);
-
+    void closeData(GenData* data);
+    void initSock(GenData* data);
+    
 private:
-    void setFlowctl(EnumDir enDir, GenData* data, TFunc func); 
-
     int regSvr(int fd, ISockSvr* svr, long data2,
         unsigned rd_thresh, unsigned wr_thresh,
         const char szIP[], int port);
     
     int regCli(int fd, ISockCli* cli, long data2,
         unsigned rd_thresh, unsigned wr_thresh,
-        const char szIP[], int port);
-
-    int regTimer(int fd);
-
-    void closeData(GenData* data); 
+        const char szIP[], int port); 
     
 private:
     Receiver* m_receiver;
     Sender* m_sender;
     Dealer* m_dealer;
     ManageCenter* m_center; 
-    int m_timer_fd; 
 };
 
 #endif

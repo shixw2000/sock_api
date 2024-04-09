@@ -20,7 +20,6 @@ Sender::PWrFunc Sender::m_func[ENUM_WR_END] = {
     &Sender::writeDefault,
     &Sender::writeSock,
     &Sender::writeConnector,
-    &Sender::writeTimer,
 };
 
 Sender::Sender(ManageCenter* center, Director* director) {
@@ -35,9 +34,11 @@ Sender::Sender(ManageCenter* center, Director* director) {
     initList(&m_run_queue);
     initList(&m_cmd_queue);
     initList(&m_time_flash_queue);
+    initList(&m_time_flash_conn);
     
-    m_ev_fd = 0;
+    m_ev_fd[0] = m_ev_fd[1] = 0;
     m_busy = false;
+    m_tick = 0;
 }
 
 Sender::~Sender() {
@@ -47,10 +48,8 @@ int Sender::init() {
     int ret = 0;
     int cap = m_center->capacity();
 
-    ret = MiscTool::creatEvent();
-    if (0 < ret) {
-        m_ev_fd = ret;
-    } else {
+    ret = MiscTool::creatPipes(&m_ev_fd);
+    if (0 != ret) {
         return -1;
     }
 
@@ -67,7 +66,7 @@ int Sender::init() {
     TickTimer::setTimerCb(m_1sec_obj, &Sender::Send1SecCb, (long)this);
     startTimer1Sec();
 
-    m_pfds[0].fd = m_ev_fd;
+    m_pfds[0].fd = m_ev_fd[0];
     m_pfds[0].events = POLLIN;
 
     return ret;
@@ -94,10 +93,15 @@ void Sender::finish() {
         m_lock = NULL;
     }
 
-    if (0 < m_ev_fd) {
-        SockTool::closeSock(m_ev_fd);
-        m_ev_fd = 0;
+    if (0 < m_ev_fd[1]) {
+        SockTool::closeSock(m_ev_fd[1]);
+        m_ev_fd[1] = 0;
     }
+
+    if (0 < m_ev_fd[0]) {
+        SockTool::closeSock(m_ev_fd[0]);
+        m_ev_fd[0] = 0;
+    } 
 }
 
 GenData* Sender::find(int fd) const {
@@ -116,6 +120,7 @@ void Sender::doTasks() {
 } 
 
 void Sender::consume() {
+    unsigned tick = 0;
     LList runlist = INIT_LIST(runlist);
     LList cmdlist = INIT_LIST(cmdlist);
 
@@ -128,6 +133,11 @@ void Sender::consume() {
         append(&cmdlist, &m_cmd_queue);
     }
 
+    if (0 < m_tick) {
+        tick = m_tick;
+        m_tick = 0;
+    }
+
     if (m_busy) {
         m_busy = false;
     }
@@ -137,6 +147,10 @@ void Sender::consume() {
         dealRunQue(&runlist);
     } 
 
+    if (0 < tick) {
+        m_timer->run(tick);
+    }
+
     if (!isEmpty(&cmdlist)) { 
         dealCmds(&cmdlist);
     } 
@@ -145,14 +159,14 @@ void Sender::consume() {
 bool Sender::wait() {
     GenData* data = NULL;
     LList* node = NULL;
-    int timeout = 1000;
+    int timeout = DEF_POLL_TIME_MSEC;
     int size = 0;
     int cnt = 0;
 
     size = 1;
     for_each_list(node, &m_wait_queue) {
-        data = CONTAINER(node, GenData, m_wr_node);
-        m_pfds[size++].fd = data->m_fd;
+        data = m_center->fromNode(ENUM_DIR_SENDER, node);
+        m_pfds[size++].fd = m_center->getFd(data);
     }
 
     cnt = poll(m_pfds, size, timeout);
@@ -162,7 +176,7 @@ bool Sender::wait() {
     } else if (0 < cnt) { 
         /* index of 0 is the special event fd */
         if (0 != m_pfds[0].revents) {
-            MiscTool::read8Bytes(m_ev_fd);
+            MiscTool::readPipeEvent(m_ev_fd[0]);
             
             /* reset the flag */
             m_pfds[0].revents = 0; 
@@ -174,7 +188,6 @@ bool Sender::wait() {
                 data = find(m_pfds[i].fd); 
                     
                 /* move from wait queue to run queue */
-                del(&data->m_wr_node);
                 queue(data);
                 
                 /* reset the flag */
@@ -199,31 +212,43 @@ void Sender::unlock() {
 }
 
 void Sender::signal() {
-    MiscTool::writeEvent(m_ev_fd);
+    MiscTool::writePipeEvent(m_ev_fd[1]);
 }
 
 void Sender::setStat(GenData* data, int stat) {
     m_center->setStat(ENUM_DIR_SENDER, data, stat); 
 }
 
-void Sender::lockSet(GenData* data, int stat) {
-    lock();
-    setStat(data, stat);
-    unlock();
+bool Sender::_queue(GenData* data, int expectStat) {
+    bool action = false;
+    int stat = m_center->getStat(ENUM_DIR_SENDER, data);
+
+    if (expectStat == stat) {
+        setStat(data, ENUM_STAT_READY);
+
+        if (!m_busy) {
+            m_busy = true;
+            action = true;
+        }
+
+        m_center->addNode(ENUM_DIR_SENDER, &m_run_queue, data);
+    }
+
+    return action;
 }
 
-int Sender::_activate(GenData* data, int expectStat) {
+bool Sender::queue(GenData* data) {
     bool action = false;
+    
+    /* delete from wait queue, no need lock */
+    m_center->delNode(ENUM_DIR_SENDER, data);
 
-    lock(); 
-    action = _queue(data, expectStat);
+    /* add to run queue */
+    lock();
+    action = _queue(data, ENUM_STAT_BLOCKING);
     unlock();
     
-    if (action) {
-        signal();
-    }
-    
-    return 0;
+    return action;
 }
 
 int Sender::activate(GenData* data) {
@@ -233,31 +258,18 @@ int Sender::activate(GenData* data) {
     return ret;
 }
 
-bool Sender::_queue(GenData* data, int expectStat) {
+int Sender::_activate(GenData* data, int stat) {
     bool action = false;
 
-    if (expectStat == data->m_wr_stat) {
-        setStat(data, ENUM_STAT_READY);
-
-        if (!m_busy) {
-            m_busy = true;
-            action = true;
-        }
-        
-        add(&m_run_queue, &data->m_wr_node);
+    lock();
+    action = _queue(data, stat); 
+    unlock();
+    
+    if (action) {
+        signal();
     }
 
-    return action;
-}
-
-bool Sender::queue(GenData* data) {
-    bool action = false;
-    
-    lock();
-    action = _queue(data, ENUM_STAT_BLOCKING);
-    unlock();
-
-    return action;
+    return 0;
 }
 
 int Sender::addCmd(NodeCmd* pCmd) {
@@ -282,26 +294,35 @@ int Sender::sendMsg(int fd, NodeMsg* pMsg) {
     bool action = false;
     GenData* data = NULL; 
 
+    LOG_DEBUG("fd=%d| msg=send msg|", fd);
+
     data = find(fd); 
-    
-    lock(); 
-    MsgUtil::addNodeMsg(&data->m_wr_msg_que, pMsg);
-    action = _queue(data, ENUM_STAT_IDLE); 
-    unlock();
+    if (!m_center->isClosed(data)) {
+        lock(); 
+        m_center->addMsg(ENUM_DIR_SENDER, data, pMsg);
+        action = _queue(data, ENUM_STAT_IDLE); 
+        unlock();
 
-    if (action) {
-        signal();
+        if (action) {
+            signal();
+        }
+
+        return 0;
+    } else {
+        MsgUtil::freeNodeMsg(pMsg);
+        return -1;
     }
-
-    return 0;
 }
 
-int Sender::notifyTimer(GenData* data, unsigned tick) {
+int Sender::notifyTimer(unsigned tick) {
     bool action = false;
     
     lock();
-    data->m_wr_tick += tick;
-    action = _queue(data, ENUM_STAT_IDLE); 
+    m_tick += tick;
+    if (!m_busy) {
+        m_busy = true;
+        action = true;
+    } 
     unlock();
 
     if (action) {
@@ -317,9 +338,9 @@ void Sender::dealRunQue(LList* list) {
     LList* n = NULL;
 
     for_each_list_safe(node, n, list) {
-        data = CONTAINER(node, GenData, m_wr_node); 
+        data = m_center->fromNode(ENUM_DIR_SENDER, node);
 
-        del(&data->m_wr_node); 
+        m_center->delNode(ENUM_DIR_SENDER, data);
         callback(data);
     }
 }
@@ -335,10 +356,37 @@ void Sender::cbTimer1Sec() {
     if (!isEmpty(&m_time_flash_queue)) {
         dealFlashTimeout(now, &m_time_flash_queue);
     }
+
+    /* checkk connect timeout */
+    if (!isEmpty(&m_time_flash_conn)) {
+        dealFlashConn(now, &m_time_flash_conn);
+    }
 }
 
 void Sender::startTimer1Sec() {
     m_timer->schedule(m_1sec_obj, DEF_NUM_PER_SEC);
+}
+
+void Sender::dealFlashConn(unsigned now, LList* list) { 
+    GenData* data = NULL;
+    LList* node = NULL;
+    LList* n = NULL;
+    bool expired = false;
+
+    for_each_list_safe(node, n, list) {
+        data = m_center->fromTimeout(ENUM_DIR_SENDER, node);
+
+        expired = m_center->chkExpire(ENUM_DIR_SENDER, data, now);
+        if (!expired) {
+            break;
+        } else {
+            detach(data, ENUM_STAT_TIMEOUT); 
+
+            /* connect timeout */
+            m_center->setConnRes(data, -2);
+            m_director->activate(ENUM_DIR_DEALER, data);
+        }
+    } 
 }
 
 void Sender::dealFlashTimeout(unsigned now, LList* list) { 
@@ -348,60 +396,53 @@ void Sender::dealFlashTimeout(unsigned now, LList* list) {
     bool expired = false;
 
     for_each_list_safe(node, n, list) {
-        data = CONTAINER(node, GenData, m_wr_timeout_node);
+        data = m_center->fromTimeout(ENUM_DIR_SENDER, node);
 
         expired = m_center->chkExpire(ENUM_DIR_SENDER, data, now);
         if (!expired) {
             break;
         } else {
-            del(&data->m_wr_timeout_node); 
+            LOG_INFO("flash_timeout| fd=%d| msg=write close|", 
+                m_center->getFd(data));
+        
+            detach(data, ENUM_STAT_TIMEOUT); 
+     
             m_director->notifyClose(data);
         }
     } 
 }
 
-void Sender::addFlashTimeout(unsigned now, 
+void Sender::addFlash(unsigned now, 
     LList* list, GenData* data) {
     bool action = false;
     
     /* timeout check */
     action = m_center->updateExpire(ENUM_DIR_SENDER, data, now);
     if (action) {
-        del(&data->m_wr_timeout_node);
-        add(list, &data->m_wr_timeout_node);
+        m_center->delTimeout(ENUM_DIR_SENDER, data);
+        m_center->addTimeout(ENUM_DIR_SENDER, list, data);
     }
 }
 
 void Sender::callback(GenData* data) {
-    if (0 <= data->m_wr_cb && ENUM_WR_END > data->m_wr_cb) {
-        (this->*(m_func[data->m_wr_cb]))(data); 
+    int cb = m_center->getCb(ENUM_DIR_SENDER, data);
+    
+    if (0 <= cb && ENUM_WR_END > cb) {
+        (this->*(m_func[cb]))(data); 
     } else { 
         (this->*(m_func[ENUM_WR_DEFAULT]))(data); 
     }
 }
 
 void Sender::writeDefault(GenData* data) {
-    int fd = m_center->getFd(data);
+    LOG_INFO("fd=%d| stat=%d| cb=%d| msg=invalid write cb|", 
+        m_center->getFd(data),
+        m_center->getStat(ENUM_DIR_SENDER, data), 
+        m_center->getCb(ENUM_DIR_SENDER, data));
     
-    LOG_INFO("fd=%d| stat=%d| cb=%d| invalid write data", 
-        fd, data->m_wr_stat, data->m_wr_cb);
+    detach(data, ENUM_STAT_ERROR);
     
-    lockSet(data, ENUM_STAT_ERROR);
     m_director->notifyClose(data);
-}
-
-void Sender::writeTimer(GenData* data) {
-    unsigned tick = 0;
-
-    lock();
-    tick = data->m_wr_tick;
-    data->m_wr_tick = 0; 
-    setStat(data, ENUM_STAT_IDLE);
-    unlock();
-
-    if (0 < tick) {
-        m_timer->run(tick);
-    }
 }
 
 void Sender::writeConnector(GenData* data) {
@@ -410,25 +451,23 @@ void Sender::writeConnector(GenData* data) {
 
     bOk = SockTool::chkConnectStat(fd);
     if (bOk) {
-        data->m_wr_conn = 0;
+        m_center->setConnRes(data, 0);
     } else {
-        data->m_wr_conn = -1; 
+        m_center->setConnRes(data, -1);
     } 
 
-    lockSet(data, ENUM_STAT_DISABLE);
+    setStat(data, ENUM_STAT_DISABLE);
+
+    /* delete from timeout */
+    m_center->delTimeout(ENUM_DIR_SENDER, data);
     m_director->activate(ENUM_DIR_DEALER, data);
 }
 
 void Sender::writeSock(GenData* data) {
-    int fd = m_center->getFd(data);
     unsigned now = m_timer->now();
-    int ret = 0;
-    unsigned total = 0;
     unsigned max = 0;
-    LList* node = NULL;
-    NodeMsg* base = NULL;
+    LList* list = NULL;
     unsigned threshold = 0;
-    int stat = ENUM_STAT_READY;
 
     m_center->clearBytes(ENUM_DIR_SENDER, data, now);
     threshold = m_center->getWrThresh(data); 
@@ -436,88 +475,109 @@ void Sender::writeSock(GenData* data) {
     if (0 < threshold) { 
         max = m_center->calcThresh(ENUM_DIR_SENDER, data, now);
         if (0 == max) {
-            stat = ENUM_STAT_FLOWCTL;
             flowCtl(data, 0);
+            return;
         }
     } else {
         max = 0;
     } 
 
-    base = data->m_wr_cur_msg;
-    while (ENUM_STAT_READY == stat) {
-        if (NULL == base) {
-            lock();
-            if (!isEmpty(&data->m_wr_msg_que)) {
-                node = first(&data->m_wr_msg_que);
-                base = MsgUtil::toNodeMsg(node);
+    list = m_center->getWrPrivQue(data);
+    if (isEmpty(list)) {
+        lock();
+        m_center->appendQue(ENUM_DIR_SENDER, list, data);
+        if (isEmpty(list)) {
+            setStat(data, ENUM_STAT_IDLE);
+        }
+        unlock();
 
-                del(node); 
-            } else {
-                setStat(data, ENUM_STAT_IDLE);
-                stat = ENUM_STAT_IDLE;
-            }
-            unlock();
-        } 
-
-        if (NULL != base) {
-            ret = m_center->writeMsg(fd, base, max); 
-            if (MsgUtil::completedMsg(base)) {
-                
-                MsgUtil::freeNodeMsg(base);
-                base = NULL;
-            }
-
-            if (0 < ret) { 
-                total += ret;
-                if (0 < max && total >= max) {
-                    stat = ENUM_STAT_FLOWCTL;
-                    flowCtl(data, total);
-                }
-            } else if (0 == ret) {
-                stat = ENUM_STAT_BLOCKING;
-                add(&m_wait_queue, &data->m_wr_node);
-                lockSet(data, ENUM_STAT_BLOCKING);
-            } else {
-                stat = ENUM_STAT_ERROR;
-                writeDefault(data);
-            }
+        if (isEmpty(list)) {
+            return;
         } 
     }
 
-    data->m_wr_cur_msg = base;
-
-    postSendData(now, data, stat, max, total);
+    writeMsgQue(data, list, now, max);
 }
 
-void Sender::postSendData(unsigned now, GenData* data,
-    int stat, unsigned max, unsigned total) {
+void Sender::writeMsgQue(GenData* data, 
+    LList* queue, unsigned now, unsigned max) {
+    int fd = m_center->getFd(data);
+    int ret = 0;
+    unsigned total = 0;
+    LList* node = NULL;
+    NodeMsg* base = NULL; 
     
-    if (0 < total) {
-        m_center->recordBytes(ENUM_DIR_SENDER, data, now, total);
+    while (!isEmpty(queue)) { 
+        if (NULL == node) {
+            node = first(queue);
+            base = MsgUtil::toNodeMsg(node);
+        }
+        
+        ret = m_center->writeMsg(fd, base, max); 
+        if (MsgUtil::completedMsg(base)) {
+            
+            del(node);
+            node = NULL;
+            
+            MsgUtil::freeNodeMsg(base); 
+        }
 
-        addFlashTimeout(now, &m_time_flash_queue, data);
+        if (0 < ret) { 
+            total += ret;
+            if (0 < max && total >= max) {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
 
-        (void)stat;
-        (void)max;
-        LOG_DEBUG("write_sock| fd=%d| stat=%d| max=%u| total=%u|",
-            m_center->getFd(data), stat, max, total);  
+    if (0 <= ret) {
+        if (0 < total) {
+            LOG_DEBUG("write_sock| fd=%d| ret=%d|"
+                " max=%u| total=%u|",
+                fd, ret, max, total);
+
+            m_center->recordBytes(ENUM_DIR_SENDER, 
+                data, now, total);
+            addFlash(now, &m_time_flash_queue, data);
+        }
+
+        if (0 < ret) {
+            if (isEmpty(queue)) {
+                _activate(data, ENUM_STAT_READY);
+            } else {
+                flowCtl(data, total);
+            }
+        } else {
+            setStat(data, ENUM_STAT_BLOCKING);
+            m_center->addNode(ENUM_DIR_SENDER, &m_wait_queue, data); 
+        }
+    } else {
+        LOG_INFO("write_sock| fd=%d| ret=%d|"
+            " max=%u| total=%u| msg=close|",
+            fd, ret, max, total);
+        
+        detach(data, ENUM_STAT_ERROR);
+    
+        m_director->notifyClose(data);
     }
 }
 
 void Sender::flowCtlCallback(GenData* data) {
     LOG_DEBUG("<== end wr flowctl| fd=%d| now=%u|",
-        data->m_fd, m_timer->now());
-    
+        m_center->getFd(data), m_timer->now());
+
     _activate(data, ENUM_STAT_FLOWCTL);
 }
 
 void Sender::flowCtl(GenData* data, unsigned total) { 
     (void)total;
     LOG_DEBUG("==> begin wr flowctl| fd=%d| now=%u| total=%u|",
-        data->m_fd, m_timer->now(), total);
+        m_center->getFd(data), m_timer->now(), total);
     
-    lockSet(data, ENUM_STAT_FLOWCTL); 
-    m_timer->schedule(&data->m_wr_flowctl, DEF_FLOWCTL_TICK_NUM);
+    setStat(data, ENUM_STAT_FLOWCTL); 
+    m_center->flowctl(ENUM_DIR_SENDER, m_timer, data);
 }
 
 void Sender::dealCmds(LList* list) {
@@ -554,6 +614,9 @@ void Sender::procCmd(NodeCmd* base) {
 
 void Sender::cmdAddFd(NodeCmd* base) {
     int fd = -1;
+    int stat = 0;
+    int cb = 0;
+    unsigned now = m_timer->now();
     CmdComm* pCmd = NULL;
     GenData* data = NULL;
 
@@ -563,18 +626,33 @@ void Sender::cmdAddFd(NodeCmd* base) {
     if (exists(fd)) { 
         data = find(fd);
 
-        if(ENUM_STAT_INVALID == data->m_wr_stat) {
-            lock();
+        cb = m_center->getCb(ENUM_DIR_SENDER, data);
+        stat = m_center->getStat(ENUM_DIR_SENDER, data);
+
+        if(ENUM_STAT_INIT == stat) {
             setStat(data, ENUM_STAT_BLOCKING);
             
             /* first to wait for write */
-            add(&m_wait_queue, &data->m_wr_node);
-            unlock();
+            m_center->addNode(ENUM_DIR_SENDER, &m_wait_queue, data);
 
-            addFlashTimeout(m_timer->now(), 
-                &m_time_flash_queue, data);
+            if (ENUM_WR_SOCK == cb) {
+                addFlash(now, &m_time_flash_queue, data);
+            } else if (ENUM_WR_Connector == cb) {
+                addFlash(now, &m_time_flash_conn, data);
+            } else {
+            }
         }
     }
+}
+
+void Sender::detach(GenData* data, int stat) {
+    lock();
+    setStat(data, stat);
+    m_center->delNode(ENUM_DIR_SENDER, data); 
+    unlock();
+
+    m_center->delTimeout(ENUM_DIR_SENDER, data);
+    m_center->unflowctl(ENUM_DIR_SENDER, data);
 }
 
 void Sender::cmdRemoveFd(NodeCmd* base) { 
@@ -591,13 +669,7 @@ void Sender::cmdRemoveFd(NodeCmd* base) {
     if (exists(fd)) { 
         data = find(fd);
 
-        lock(); 
-        setStat(data, ENUM_STAT_INVALID); 
-        del(&data->m_wr_node); 
-        unlock();
-
-        del(&data->m_wr_timeout_node);
-        TickTimer::delTimer(&data->m_wr_flowctl); 
+        detach(data, ENUM_STAT_INVALID);
         
         /* go to the third step of closing */
         refCmd = MsgUtil::refNodeCmd(base);

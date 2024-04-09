@@ -13,9 +13,9 @@ public:
 
     static int getTid();
 
-    int start(const char name[]); 
-    void stop();
-    void join(); 
+    virtual int start(const char name[]); 
+    virtual void stop(); 
+    virtual void join(); 
 
     bool isRun() const;
 

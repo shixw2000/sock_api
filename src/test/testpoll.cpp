@@ -4,7 +4,8 @@
 
 
 int testSrv(const char ip[], int port,
-    unsigned rd_thresh, unsigned wr_thresh) {
+    unsigned rd_thresh, unsigned wr_thresh,
+    unsigned rd_timeout, unsigned wr_timeout) {
     int ret = 0;
     SockFrame* frame = NULL;
     SockProto* proto = NULL;
@@ -18,7 +19,7 @@ int testSrv(const char ip[], int port,
 
     do { 
         frame->setProto(proto);
-        frame->setTimeout(60, 60);
+        frame->setTimeout(rd_timeout, wr_timeout);
         frame->creatSvr(ip, port, psvr, 
             0, rd_thresh, wr_thresh);
 
@@ -83,24 +84,30 @@ int testPoll(int argc, char* argv[]) {
     int pkgCnt = 0;
     unsigned rd_thresh = 0;
     unsigned wr_thresh = 0;
+    unsigned rd_timeout = 0;
+    unsigned wr_timeout = 0;
 
     if (2 <= argc) {
         opt = atoi(argv[1]);
     }
 
-    if (1 == opt) {
-        
-
+    if (1 == opt) { 
         if (4 <= argc) {
             ip = argv[2];
             port = atoi(argv[3]);
 
-            if (6 == argc) {
+            if (6 <= argc) {
                 rd_thresh = atoi(argv[4]);
-                wr_thresh = atoi(argv[5]);
+                wr_thresh = atoi(argv[5]); 
+
+                if (8 <= argc) {
+                    rd_timeout = atoi(argv[6]);
+                    wr_timeout = atoi(argv[7]);
+                }
             }
             
-            testSrv(ip, port, rd_thresh, wr_thresh);
+            testSrv(ip, port, rd_thresh, wr_thresh,
+                rd_timeout, wr_timeout);
         } else {
             usage(argv[0]);
         }
