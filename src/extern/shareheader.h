@@ -19,6 +19,8 @@
 #define ATOMIC_INC_FETCH(ptr) __sync_add_and_fetch((ptr), 1)
 #define ATOMIC_DEC_FETCH(ptr) __sync_sub_and_fetch((ptr), 1)
 
+#define ARR_CNT(x) (int)(sizeof(x)/sizeof((x)[0]))
+
 extern void log_screen(const char format[], ...);
 
 #if 0

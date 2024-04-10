@@ -70,7 +70,7 @@ private:
 
     void cbTimer1Sec();
     void startTimer1Sec();
-    static void Send1SecCb(long data1, long);
+    static void sendSecCb(long data1, long);
 
     void writeMsgQue(GenData* data, LList* queue,
         unsigned now, unsigned max);

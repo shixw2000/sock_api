@@ -18,6 +18,8 @@ struct ClockTime {
 
 #define INIT_CLOCK_TIME {0,0}
 
+typedef void (*PFunSig)(int);
+
 class MiscTool {
 public:
     static void getClock(ClockTime* ct);
@@ -37,6 +39,11 @@ public:
     static int creatEvent();
     static int creatTimer(int ms);
     static int creatPipes(int (*)[2]);
+
+    static void armSig(int sig, PFunSig fn);
+    static void raise(int sig);
+    static bool isCoreSig(int sig);
+    static int maxSig();
 };
 
 
@@ -60,8 +67,6 @@ private:
     static int creatSock();
 };
 
-
-extern void log_screen(const char format[], ...);
 
 #endif
 

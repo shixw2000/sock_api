@@ -63,5 +63,7 @@ private:
     _intern* m_intern;
 };
 
+extern void armSigs();
+
 #endif
 

@@ -5,6 +5,7 @@
 #include<time.h>
 #include<stdarg.h>
 #include<cstdlib>
+#include<signal.h>
 #include<sys/types.h>
 #include<sys/socket.h>
 #include<sys/eventfd.h>
@@ -249,6 +250,46 @@ int MiscTool::creatPipes(int (*pfds)[2]) {
     return ret;
 }
 
+void MiscTool::armSig(int sig, PFunSig fn) {
+    struct sigaction act;
+
+    memset(&act, 0, sizeof(act));
+    sigemptyset(&act.sa_mask);
+
+    act.sa_flags = SA_RESTART;
+
+    if (NULL != fn) {
+        act.sa_handler = fn;
+    } else {
+        act.sa_handler = SIG_DFL;
+    }
+  
+    sigaction(sig, &act, NULL);
+}
+
+void MiscTool::raise(int sig) {
+    ::raise(sig);
+}
+
+bool MiscTool::isCoreSig(int sig) {
+    static const int g_core_signals[] = {
+        SIGQUIT, SIGILL, SIGABRT, SIGFPE, 
+        SIGSEGV, SIGBUS, SIGSYS
+    };
+
+    for (int i=0; i<ARR_CNT(g_core_signals); ++i) {
+        if (g_core_signals[i] == sig) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+int MiscTool::maxSig() {
+    return SIGRTMIN;
+}
+
 int SockTool::creatSock() {
     int fd = -1;
 
@@ -482,4 +523,5 @@ int SockTool::sendTcp(int fd, const void* psz, int max) {
 
     return ret;
 }
+
 

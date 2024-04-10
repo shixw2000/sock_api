@@ -61,15 +61,23 @@ void TickTimer::tick() {
 
 void TickTimer::doTimer(HRoot* list) {
     TimerObj* ele = NULL;
-    HList* pos = NULL;
-    HList* n = NULL; 
+    HList* first = NULL;
+    bool bDel = false;
 
-    for_each_hlist_safe(pos, n, list) {
-        hlistDel(pos); 
+    /* just here, need do like this for the most safe rule */
+    while (!hlistEmpty(list)) {
+        first = hlistFirst(list);
+        hlistDel(first); 
 
-        ele = CONTAINER(pos, TimerObj, m_node); 
+        ele = CONTAINER(first, TimerObj, m_node); 
         
+        bDel = ele->m_bDel;
         ele->func(ele->m_data, ele->m_data2);
+        if (bDel) {
+            TickTimer::freeObj(ele);
+        } else if (0 < ele->m_interval) {
+            _schedule(ele, ele->m_interval);
+        }
     } 
 }
 
@@ -79,11 +87,12 @@ void TickTimer::run(unsigned tm) {
     tick();
 }
 
-void TickTimer::schedule(TimerObj* ele, unsigned delay) { 
+void TickTimer::schedule(TimerObj* ele, unsigned delay, unsigned interval) { 
     if (0 == delay) {
         delay = 1;
     }
     
+    ele->m_interval = interval;
     _schedule(ele, delay);
 }
 
@@ -127,6 +136,10 @@ void TickTimer::setTimerCb(TimerObj* ele,
     ele->func = func;
     ele->m_data = data;
     ele->m_data2 = data2;
+}
+
+void TickTimer::setTimerAutoDel(TimerObj* ele) {
+    ele->m_bDel = true;
 }
 
 TimerObj* TickTimer::allocObj() {

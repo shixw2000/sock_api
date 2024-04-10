@@ -10,7 +10,7 @@
 #include"lock.h"
 
 
-void Sender::Send1SecCb(long data1, long) {
+void Sender::sendSecCb(long data1, long) {
     Sender* sender = (Sender*)data1;
 
     sender->cbTimer1Sec();
@@ -63,7 +63,7 @@ int Sender::init() {
     m_timer = new TickTimer;
     
     m_1sec_obj = TickTimer::allocObj();
-    TickTimer::setTimerCb(m_1sec_obj, &Sender::Send1SecCb, (long)this);
+    TickTimer::setTimerCb(m_1sec_obj, &Sender::sendSecCb, (long)this);
     startTimer1Sec();
 
     m_pfds[0].fd = m_ev_fd[0];
@@ -350,8 +350,6 @@ void Sender::cbTimer1Sec() {
     
     LOG_DEBUG("=======sender_now=%u|", now);
     
-    startTimer1Sec();
-    
     /* every one second */
     if (!isEmpty(&m_time_flash_queue)) {
         dealFlashTimeout(now, &m_time_flash_queue);
@@ -364,7 +362,7 @@ void Sender::cbTimer1Sec() {
 }
 
 void Sender::startTimer1Sec() {
-    m_timer->schedule(m_1sec_obj, DEF_NUM_PER_SEC);
+    m_timer->schedule(m_1sec_obj, 0, DEF_NUM_PER_SEC);
 }
 
 void Sender::dealFlashConn(unsigned now, LList* list) { 

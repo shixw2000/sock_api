@@ -10,7 +10,7 @@
 #include"misc.h"
 
 
-void Receiver::Recv1SecCb(long data1, long) {
+void Receiver::recvSecCb(long data1, long) {
     Receiver* receiver = (Receiver*)data1;
 
     receiver->cbTimer1Sec();
@@ -69,7 +69,7 @@ int Receiver::init() {
 
     m_timer = new TickTimer; 
     m_1sec_obj = TickTimer::allocObj();
-    TickTimer::setTimerCb(m_1sec_obj, &Receiver::Recv1SecCb, (long)this);
+    TickTimer::setTimerCb(m_1sec_obj, &Receiver::recvSecCb, (long)this);
     startTimer1Sec();
 
     m_pfds[0].fd = m_ev_fd[0];
@@ -306,8 +306,6 @@ void Receiver::dealRunQue(LList* list) {
 void Receiver::cbTimer1Sec() {
     unsigned now = m_timer->now();
     
-    startTimer1Sec();
-
     LOG_DEBUG("=======recver_now=%u|", now);
     
     if (!isEmpty(&m_time_flash_queue)) {
@@ -316,7 +314,7 @@ void Receiver::cbTimer1Sec() {
 }
 
 void Receiver::startTimer1Sec() {
-    m_timer->schedule(m_1sec_obj, DEF_NUM_PER_SEC);
+    m_timer->schedule(m_1sec_obj, 0, DEF_NUM_PER_SEC);
 }
 
 void Receiver::dealFlashTimeout(unsigned now, LList* list) {

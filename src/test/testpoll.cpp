@@ -89,6 +89,10 @@ int testPoll(int argc, char* argv[]) {
 
     if (2 <= argc) {
         opt = atoi(argv[1]);
+        armSigs();
+    } else {
+        usage(argv[0]);
+        return -1;
     }
 
     if (1 == opt) { 

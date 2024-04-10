@@ -305,6 +305,17 @@ struct TaskData {
     char m_szIP[32];
 };
 
+static TaskData* allocTask() {
+    TaskData* data = NULL;
+    
+    data = (TaskData*)calloc(1, sizeof(TaskData));
+    return data;
+}
+
+static void freeTask(TaskData* data) {
+    free(data);
+}
+
 static void _creatCli(long arg, long arg2) {
     Director* director = (Director*)arg;
     TaskData* task = (TaskData*)arg2;
@@ -317,7 +328,7 @@ static void _creatCli(long arg, long arg2) {
     
     director->creatCli(ip, port, cli, data2, rd_thresh, wr_thresh);
 
-    free(task);
+    freeTask(task);
 }
 
 int Director::creatSvr(const char szIP[], int port, 
@@ -370,7 +381,8 @@ void Director::sheduleCli(unsigned delay,
     unsigned rd_thresh, unsigned wr_thresh) { 
     TaskData* data = NULL;
     
-    data = new TaskData;
+    data = allocTask();
+    
     data->m_base = base;
     data->m_data2 = data2;
     data->m_port = port;

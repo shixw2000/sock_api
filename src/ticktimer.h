@@ -20,8 +20,11 @@ public:
     
     static void setTimerCb(TimerObj* ele, 
         TFunc cb, long data, long data2 = 0);
+    
+    static void setTimerAutoDel(TimerObj* ele);
 
-    void schedule(TimerObj* ele, unsigned delay = 0);
+    void schedule(TimerObj* ele, unsigned delay = 0,
+        unsigned interval = 0);
 
     void run(unsigned tick);
     

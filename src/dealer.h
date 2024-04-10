@@ -59,6 +59,10 @@ private:
     void onAccept(GenData* listenData,
         int newFd, const char ip[], int port);
 
+    void cbTimer1Sec();
+    void startTimer1Sec();
+    static void dealSecCb(long data1, long);
+
 private:
     static PDealFunc m_func[ENUM_DEAL_END];
     LList m_run_queue;
@@ -69,6 +73,7 @@ private:
     ManageCenter* m_center;
     Director* m_director;
     TickTimer* m_timer;
+    TimerObj* m_1sec_obj;
 };
 
 #endif

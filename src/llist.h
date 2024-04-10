@@ -43,6 +43,7 @@ void initHList(HList* node);
 void initHRoot(HRoot* root);
 int hlistUnhashed(const HList* node);
 int hlistEmpty(const HRoot* root);
+HList* hlistFirst(HRoot* root);
 void hlistDel(HList* node);
 void hlistAdd(HRoot* root, HList* node);
 void hlistReplace(HRoot* dst, HRoot* src);

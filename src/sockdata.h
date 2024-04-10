@@ -85,6 +85,8 @@ struct TimerObj {
     long m_data;
     long m_data2;
     unsigned m_expire;
+    unsigned m_interval;
+    bool m_bDel;
 };
 
 struct CmdHead_t {

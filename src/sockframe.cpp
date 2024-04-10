@@ -1,6 +1,7 @@
 #include"sockframe.h"
 #include"director.h"
 #include"msgutil.h"
+#include"misc.h"
 
 
 struct SockFrame::_intern {
@@ -174,5 +175,27 @@ int SockFrame::creatCli(const char szIP[], int port,
 int SockFrame::schedule(unsigned delay, TFunc func,
     long data, long data2) {
     return m_intern->director.schedule(delay, func, data, data2);
+}
+
+static void sigHandler(int sig) {
+    LOG_ERROR("*******sig=%d| msg=catch a signal|", sig);
+
+    for (int i=0; i<MiscTool::maxSig(); ++i) {
+        if (MiscTool::isCoreSig(sig)) {
+            MiscTool::armSig(sig, NULL);
+            MiscTool::raise(sig);
+            return;
+        }
+    }
+
+    if (NULL != g_frame) {
+        g_frame->stop();
+    }
+}
+
+void armSigs() {
+    for (int i=1; i<MiscTool::maxSig(); ++i) {
+        MiscTool::armSig(i, &sigHandler);
+    }
 }
 

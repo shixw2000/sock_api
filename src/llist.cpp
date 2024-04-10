@@ -83,6 +83,10 @@ int hlistEmpty(const HRoot* root) {
 	return !root->m_first;
 }
 
+HList* hlistFirst(HRoot* root) {
+    return root->m_first;
+}
+
 void hlistDel(HList* node) {
 	HList* next = node->m_next;
 	HList** pprev = node->m_pprev;
@@ -142,7 +146,7 @@ void finishQue(Queue* queue) {
         free(queue->m_cache);
     }
 
-    memset(queue->m_cache, 0, sizeof(Queue));
+    memset(queue, 0, sizeof(Queue));
 }
 
 bool isQueEmpty(Queue* queue) {

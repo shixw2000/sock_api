@@ -10,6 +10,12 @@
 #include"misc.h"
 
 
+void Dealer::dealSecCb(long data1, long) {
+    Dealer* dealer = (Dealer*)data1;
+
+    dealer->cbTimer1Sec();
+}
+
 Dealer::PDealFunc Dealer::m_func[ENUM_DEAL_END] = {
     &Dealer::procDefault,
     &Dealer::procMsg,
@@ -22,6 +28,7 @@ Dealer::Dealer(ManageCenter* center, Director* director) {
     m_director = director;
     m_timer = NULL;
     m_lock = NULL;
+    m_1sec_obj = NULL;
     
     initList(&m_run_queue);
     initList(&m_cmd_queue);
@@ -39,10 +46,19 @@ int Dealer::init() {
     m_lock = new MutexCond; 
     m_timer = new TickTimer;
     
+    m_1sec_obj = TickTimer::allocObj();
+    TickTimer::setTimerCb(m_1sec_obj, &Dealer::dealSecCb, (long)this);
+    startTimer1Sec();
+    
     return ret;
 }
 
 void Dealer::finish() {
+    if (NULL != m_1sec_obj) {
+        TickTimer::freeObj(m_1sec_obj);
+        m_1sec_obj = NULL;
+    }
+    
     if (NULL != m_timer) {
         delete m_timer;
         m_timer = NULL;
@@ -52,6 +68,17 @@ void Dealer::finish() {
         delete m_lock;
         m_lock = NULL;
     }
+}
+
+void Dealer::cbTimer1Sec() {
+    unsigned now = m_timer->now();
+    
+    (void)now;
+    LOG_DEBUG("=======deal_now=%u|", now);
+}
+
+void Dealer::startTimer1Sec() {
+    m_timer->schedule(m_1sec_obj, 0, DEF_NUM_PER_SEC);
 }
 
 GenData* Dealer::find(int fd) const {
@@ -465,6 +492,7 @@ void Dealer::cmdSchedTask(NodeCmd* base) {
         if (NULL != obj) {
             TickTimer::setTimerCb(obj, pCmd->func, 
                 pCmd->m_data, pCmd->m_data2);
+            TickTimer::setTimerAutoDel(obj);
 
             m_timer->schedule(obj, pCmd->m_delay);
         }
