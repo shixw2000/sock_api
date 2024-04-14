@@ -19,6 +19,7 @@ struct MsgHead_t {
 #pragma pack(pop)
 
 static const int DEF_MSG_HEAD_SIZE = sizeof(MsgHead_t);
+static const int MAX_MSG_SIZE = 1024 * 1024;
 
 
 #endif

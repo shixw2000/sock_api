@@ -530,6 +530,14 @@ void Receiver::procCmd(NodeCmd* base) {
         cmdAddFd(base);
         break;
 
+    case ENUM_CMD_DELAY_FD:
+        cmdDelayFd(base);
+        break;
+
+    case ENUM_CMD_UNDELAY_FD:
+        cmdUndelayFd(base);
+        break;
+
     case ENUM_CMD_REMOVE_FD:
         cmdRemoveFd(base);
         break;
@@ -548,6 +556,40 @@ void Receiver::unlock() {
 }
 
 void Receiver::cmdAddFd(NodeCmd* base) {
+    _AddFd(base, false);
+}
+
+void Receiver::cmdDelayFd(NodeCmd* base) {
+    _AddFd(base, true);
+}
+
+void Receiver::cmdUndelayFd(NodeCmd* base) {
+    int fd = -1;
+    int stat = 0;
+    int index = 0;
+    CmdComm* pCmd = NULL;
+    GenData* data = NULL;
+
+    pCmd = MsgUtil::getCmdBody<CmdComm>(base);
+    fd = pCmd->m_fd;
+
+    LOG_INFO("undelay_fd| fd=%d|", fd);
+    
+    if (exists(fd)) { 
+        data = find(fd); 
+        index = m_center->getRdIndex(data);
+
+        lock();
+        stat = m_center->getStat(ENUM_DIR_RECVER, data);
+        if (ENUM_STAT_DELAY == stat) {
+            setStat(data, ENUM_STAT_BLOCKING); 
+            m_pfds[index].fd = fd;
+        }
+        unlock(); 
+    }
+}
+
+void Receiver::_AddFd(NodeCmd* base, bool delay) {
     int fd = -1;
     int cb = 0;
     int stat = 0;
@@ -564,19 +606,25 @@ void Receiver::cmdAddFd(NodeCmd* base) {
         stat = m_center->getStat(ENUM_DIR_RECVER, data);
         
         if(ENUM_STAT_INIT == stat) {
-            m_pfds[m_size].fd = fd;
-            m_pfds[m_size].events = POLLIN;
-            m_pfds[m_size].revents = 0;
-
-            m_center->setRdIndex(data, m_size);
-            ++m_size;
             
-            setStat(data, ENUM_STAT_BLOCKING);
+            m_pfds[m_size].events = POLLIN;
+            m_pfds[m_size].revents = 0; 
+
+            if (!delay) {
+                m_pfds[m_size].fd = fd;
+                setStat(data, ENUM_STAT_BLOCKING); 
+            } else {
+                m_pfds[m_size].fd = -fd;
+                setStat(data, ENUM_STAT_DELAY);
+            }
 
             if (ENUM_RD_SOCK == cb) {
                 addFlashTimeout(m_timer->now(), 
                     &m_time_flash_queue, data);
             }
+
+            m_center->setRdIndex(data, m_size);
+            ++m_size;
         } 
     }
 }

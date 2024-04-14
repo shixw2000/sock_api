@@ -30,39 +30,44 @@ public:
     }
 
     static NodeCmd* creatNodeCmd(int size);
+    
     static void freeNodeCmd(NodeCmd* pb);
 
     static CmdHead_t* getCmd(const NodeCmd* pb); 
     
-    static const NodeCmd* toNodeCmd(const LList* node);
     static NodeCmd* toNodeCmd(LList* node);
     
     static void addNodeCmd(LList* root, NodeCmd* pb); 
-    static NodeCmd* refNodeCmd(NodeCmd* pb);
+    static NodeCmd* refNodeCmd(NodeCmd* pb); 
 
 
-    /* msg functions */
+    /* msg functions */ 
+    static NodeMsg* creatNodeMsg(int size);
+    static NodeMsg* refNodeMsg(NodeMsg* pb); 
+    
+    static void freeNodeMsg(NodeMsg* pb); 
+    
+    static char* getMsg(NodeMsg* pb); 
     static bool completedMsg(NodeMsg* pb);
     
-    static NodeMsg* creatNodeMsg(int size);
-    static void freeNodeMsg(NodeMsg* pb);
-
-    static char* getMsg(const NodeMsg* pb); 
     static void setMsgSize(NodeMsg* pb, int size);
     static int getMsgSize(const NodeMsg* pb); 
     static int getMsgPos(const NodeMsg* pb);
     static void setMsgPos(NodeMsg* pb, int pos);
     static void skipMsgPos(NodeMsg* pb, int pos);
     
-    static const NodeMsg* toNodeMsg(const LList* node);
-    static NodeMsg* toNodeMsg(LList* node);
+    static void addNodeMsg(LList* root, NodeMsg* pb);
+    static NodeMsg* toNodeMsg(LList* node); 
+
+    static char* _getPreHead(int preLen, NodeMsg* pb);
+
+    static NodeMsg* _creatPreNodeMsg(
+        int preLen, int size);
     
-    static void addNodeMsg(LList* root, NodeMsg* pb); 
-    static NodeMsg* refNodeMsg(NodeMsg* pb);
-
-
-private:
-    static int _alignment(int size);
+    static NodeMsg* _refPreNodeMsg(
+        int preLen, NodeMsg* ref);
+    
+    static int _alignment(int size); 
 };
 
 #endif

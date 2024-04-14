@@ -3,45 +3,47 @@
 #include"shareheader.h" 
 
 
-struct NodeMsg;
-
-/* the min head size used by protocol user */
-static const int MAX_MSG_HEAD_SIZE = 32; 
-
-struct SockBuffer {
-    NodeMsg* m_msg; 
-    unsigned m_pos;
-    char m_head[MAX_MSG_HEAD_SIZE];
-};
-
-class SockProto {
-public: 
-    virtual ~SockProto() {}
-
-    virtual bool parseData(int fd, SockBuffer* cache, 
-        const char* buf, int size) = 0;
-};
+struct NodeMsg; 
 
 class ISockBase {
 public:
     virtual ~ISockBase() {}
     
-    virtual void onClose(long data2, int hd) = 0;
+    virtual void onClose(int hd) = 0; 
+};
+
+class ISockComm : public ISockBase {
+public:
+    virtual int parseData(int fd, 
+        const char* buf, int size) = 0;
     
-    virtual int process(long data2, int hd, NodeMsg* msg) = 0;
+    virtual int process(int hd, NodeMsg* msg) = 0;
+};
+
+struct AccptOption {
+    ISockComm* m_sock;
+    long m_extra;
+    unsigned m_rd_thresh;
+    unsigned m_wr_thresh;
+    bool m_delay;
+};
+
+struct ConnOption {
+    unsigned m_rd_thresh;
+    unsigned m_wr_thresh;
+    bool m_delay;
 };
 
 class ISockSvr : public ISockBase {
 public:
-    virtual ~ISockSvr() {} 
-    virtual int onNewSock(long data2, int parentId, int newId) = 0;
-};
+    virtual int onNewSock(int parentId,
+        int newId, AccptOption& opt) = 0;
+}; 
 
-class ISockCli : public ISockBase {
+class ISockCli : public ISockComm {
 public:
-    virtual ~ISockCli() {}
-    virtual int onConnOK(long data2, int hd) = 0;
-    virtual void onConnFail(long data2, int hd) = 0;
+    virtual int onConnOK(int hd, ConnOption& opt) = 0;
+    virtual void onConnFail(long extra, int errcode) = 0;
 };
 
 #endif

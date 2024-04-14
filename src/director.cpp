@@ -207,15 +207,13 @@ void Director::notifyClose(int fd) {
 }
 
 int Director::regSvr(int fd, ISockSvr* svr, long data2,
-    unsigned rd_thresh, unsigned wr_thresh,
     const char szIP[], int port) {
     int ret = 0;
     GenData* data = NULL;
 
     data = m_center->reg(fd);
     if (NULL != data) { 
-        m_center->setData(data, (long)svr, data2);
-        m_center->setSpeed(data, rd_thresh, wr_thresh);
+        m_center->setData(data, svr, data2); 
         m_center->setAddr(data, szIP, port);
 
         /* just add fd for receiver */
@@ -236,19 +234,19 @@ int Director::regSvr(int fd, ISockSvr* svr, long data2,
 }
 
 void Director::setTimeout(unsigned rd_timeout, unsigned wr_timeout) { 
-    m_center->setTimeout(rd_timeout, wr_timeout);
+    m_center->setTimeout(rd_timeout* DEF_NUM_PER_SEC,
+        wr_timeout* DEF_NUM_PER_SEC);
 }
 
 int Director::regCli(int fd, ISockCli* cli, long data2,
-    unsigned rd_thresh, unsigned wr_thresh,
     const char szIP[], int port) {
     int ret = 0;
     GenData* data = NULL;
 
     data = m_center->reg(fd);
     if (NULL != data) { 
-        m_center->setData(data, (long)cli, data2);
-        m_center->setSpeed(data, rd_thresh, wr_thresh);
+        m_center->setData(data, cli, data2);
+        
         m_center->setConnTimeout(data);
         m_center->setAddr(data, szIP, port);
 
@@ -269,9 +267,47 @@ int Director::regCli(int fd, ISockCli* cli, long data2,
     return ret;
 } 
 
-void Director::setProto(SockProto* proto) {
-    m_center->setProto(proto);
+long Director::getExtra(int fd) {
+    GenData* data = NULL;
+    long extra = 0;
+
+    if (m_center->exists(fd)) {
+        data = m_center->find(fd);
+
+        extra = m_center->getExtra(data);
+    }
+
+    return extra;
+} 
+
+void Director::getSpeed(int fd, 
+    unsigned& rd_thresh, 
+    unsigned& wr_thresh) {
+    GenData* data = NULL;
+
+    if (m_center->exists(fd)) {
+        data = m_center->find(fd);
+
+        rd_thresh = m_center->getRdThresh(data) / KILO;
+        wr_thresh = m_center->getWrThresh(data) / KILO;
+    } else {
+        rd_thresh = 0;
+        wr_thresh = 0;
+    }
 }
+
+void Director::setSpeed(int fd, 
+    unsigned rd_thresh, 
+    unsigned wr_thresh) {
+    GenData* data = NULL;
+
+    if (m_center->exists(fd)) {
+        data = m_center->find(fd);
+
+        m_center->setSpeed(data, rd_thresh * KILO,
+            wr_thresh * KILO);
+    }
+} 
 
 void Director::closeData(GenData* data) {
     int fd = m_center->getFd(data);
@@ -299,8 +335,6 @@ int Director::schedule(unsigned delay, TFunc func,
 struct TaskData {
     ISockBase* m_base;
     long m_data2;
-    unsigned m_rd_thresh;
-    unsigned m_wr_thresh;
     int m_port;
     char m_szIP[32];
 };
@@ -321,29 +355,34 @@ static void _creatCli(long arg, long arg2) {
     TaskData* task = (TaskData*)arg2;
     ISockCli* cli = dynamic_cast<ISockCli*>(task->m_base);
     long data2 = task->m_data2;
-    unsigned rd_thresh = task->m_rd_thresh;
-    unsigned wr_thresh = task->m_wr_thresh;
     int port = task->m_port;
     const char* ip = task->m_szIP;
     
-    director->creatCli(ip, port, cli, data2, rd_thresh, wr_thresh);
+    director->creatCli(ip, port, cli, data2);
 
     freeTask(task);
 }
 
 int Director::creatSvr(const char szIP[], int port, 
-    ISockSvr* svr, long data2, 
-    unsigned rd_thresh, unsigned wr_thresh) {
+    ISockSvr* svr, long data2) {
     int ret = 0;
     int fd = 0; 
+
+    if (NULL == svr) {
+        return -1;
+    }
+
+    ret = SockTool::chkAddr(szIP, port);
+    if (0 != ret) {
+        return -1;
+    }
     
     fd = SockTool::creatListener(szIP, port);
     if (0 >= fd) {
         return -1;
     }
 
-    ret = regSvr(fd, svr, data2, rd_thresh, 
-        wr_thresh, szIP, port);
+    ret = regSvr(fd, svr, data2, szIP, port);
     if (0 == ret) {
         return fd;
     } else {
@@ -353,58 +392,82 @@ int Director::creatSvr(const char szIP[], int port,
 }
 
 int Director::creatCli(const char szIP[], int port,
-    ISockCli* cli, long data2, 
-    unsigned rd_thresh, unsigned wr_thresh) { 
+    ISockCli* cli, long data2) { 
     int ret = 0;
     int fd = 0;
 
-    fd = SockTool::creatConnector(szIP, port);
-    if (0 >= fd) {
+    if (NULL == cli) {
         return -1;
     }
 
-    ret = regCli(fd, cli, data2, rd_thresh,
-        wr_thresh, szIP, port);
+    ret = SockTool::chkAddr(szIP, port);
+    if (0 != ret) {
+        return -1;
+    }
+
+    fd = SockTool::creatConnector(szIP, port);
+    if (0 >= fd) {
+        cli->onConnFail(data2, -1);
+        return -1;
+    }
+
+    ret = regCli(fd, cli, data2, szIP, port);
     if (0 == ret) {
         return fd;
     } else {
-        cli->onConnFail(data2, fd);
+        cli->onConnFail(data2, -1);
         SockTool::closeSock(fd);
 
         return -1;
     } 
 }
 
-void Director::sheduleCli(unsigned delay, 
+int Director::sheduleCli(unsigned delay, 
     const char szIP[], int port, 
-    ISockCli* base, long data2,
-    unsigned rd_thresh, unsigned wr_thresh) { 
+    ISockCli* base, long data2) { 
     TaskData* data = NULL;
+    int ret = 0;
+    
+    if (NULL == base) {
+        return -1;
+    }
+
+    ret = SockTool::chkAddr(szIP, port);
+    if (0 != ret) {
+        return -1;
+    }
     
     data = allocTask();
     
     data->m_base = base;
     data->m_data2 = data2;
     data->m_port = port;
-    data->m_rd_thresh = rd_thresh;
-    data->m_wr_thresh = wr_thresh;
     strncpy(data->m_szIP, szIP, sizeof(data->m_szIP) - 1);
 
-    schedule(delay, &_creatCli, (long)this, (long)data);
+    ret = schedule(delay, &_creatCli, (long)this, (long)data);
+    return ret;
 }
 
-void Director::initSock(GenData* data) {
-    m_center->setCb(ENUM_DIR_RECVER, data, ENUM_RD_SOCK);
-    m_center->setFlowctl(ENUM_DIR_RECVER, data, readFlowctl, (long)m_receiver);
-    m_center->setStat(ENUM_DIR_RECVER, data, ENUM_STAT_INIT);
+void Director::undelayRead(int fd) {
+    sendCommCmd(ENUM_DIR_RECVER, ENUM_CMD_UNDELAY_FD, fd);
+}
+
+void Director::activateSock(GenData* data, bool delay) {
+    int fd = m_center->getFd(data); 
+  
+    m_center->setFlowctl(ENUM_DIR_RECVER, data, 
+        readFlowctl, (long)m_receiver);
     
-    /* reset to begin write */
-    m_center->setCb(ENUM_DIR_SENDER, data, ENUM_WR_SOCK);
-    m_center->setFlowctl(ENUM_DIR_SENDER, data, writeFlowctl, (long)m_sender);
-    m_center->setStat(ENUM_DIR_SENDER, data, ENUM_STAT_INIT);
+    m_center->setFlowctl(ENUM_DIR_SENDER, data, 
+        writeFlowctl, (long)m_sender);
     
-    /* reset to begin deal */
-    m_center->setCb(ENUM_DIR_DEALER, data, ENUM_DEAL_SOCK);
-    m_center->setStat(ENUM_DIR_DEALER, data, ENUM_STAT_DISABLE);
+    activate(ENUM_DIR_DEALER, data);
+    sendCommCmd(ENUM_DIR_SENDER, ENUM_CMD_ADD_FD, fd);
+
+    if (!delay) {
+        sendCommCmd(ENUM_DIR_RECVER, ENUM_CMD_ADD_FD, fd);
+    } else {
+        sendCommCmd(ENUM_DIR_RECVER, ENUM_CMD_DELAY_FD, fd);
+    }
 }
 

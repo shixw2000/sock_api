@@ -67,6 +67,10 @@ private:
     void cmdAddFd(NodeCmd* base);
     void cmdRemoveFd(NodeCmd* base);
 
+    void _AddFd(NodeCmd* base, bool delay);
+    void cmdDelayFd(NodeCmd* base);
+    void cmdUndelayFd(NodeCmd* base);
+
     void flowCtl(GenData* data, unsigned total);
 
     void cbTimer1Sec();

@@ -11,8 +11,6 @@ public:
         return m_thrId;
     }
 
-    static int getTid();
-
     virtual int start(const char name[]); 
     virtual void stop(); 
     virtual void join(); 

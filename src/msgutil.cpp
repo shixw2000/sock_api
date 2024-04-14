@@ -2,6 +2,7 @@
 #include<cstdlib>
 #include"shareheader.h"
 #include"msgutil.h"
+#include"msgtool.h"
 
 
 struct GenCmd_t {
@@ -15,7 +16,10 @@ struct NodeCmd {
     GenCmd_t* m_head;
 } __attribute__((aligned(8)));
 
+
+struct NodeMsg;
 struct GenMsg_t {
+    NodeMsg* m_origin;
     int m_capacity; 
     int m_ref_cnt;
     char m_body[0];
@@ -26,6 +30,7 @@ struct NodeMsg {
     GenMsg_t* m_head;
     int m_size;
     int m_pos;
+    int m_preLen; /* after may have extends datas */
 } __attribute__((aligned(8)));
 
 static const int DEF_CMD_OFFSET = sizeof(GenCmd_t)
@@ -108,10 +113,6 @@ void MsgUtil::addNodeCmd(LList* root, NodeCmd* pb) {
     add(root, &pb->m_list);
 }
 
-const NodeCmd* MsgUtil::toNodeCmd(const LList* node) {
-    return reinterpret_cast<const NodeCmd*>(node);
-}
-
 NodeCmd* MsgUtil::toNodeCmd(LList* node) {
     return reinterpret_cast<NodeCmd*>(node);
 }
@@ -132,20 +133,53 @@ bool MsgUtil::completedMsg(NodeMsg* pb) {
 }
 
 NodeMsg* MsgUtil::creatNodeMsg(int size) {
+    char* psz = NULL;
     NodeMsg* pb = NULL;
     GenMsg_t* ph = NULL;
     int total = _alignment(size) + DEF_MSG_OFFSET; 
 
-    pb = (NodeMsg*)std::malloc(total); 
-    ph = reinterpret_cast<GenMsg_t*>(pb + 1); 
-    
-    std::memset(pb, 0, total);
+    psz = (char*)malloc(total); 
+    memset(psz, 0, total);
+
+    pb = reinterpret_cast<NodeMsg*>(psz);
+    ph = reinterpret_cast<GenMsg_t*>(psz + sizeof(NodeMsg));
 
     initList(&pb->m_list); 
     pb->m_head = ph;
     pb->m_size = size;
     pb->m_pos = 0;
+    pb->m_preLen = 0;
     
+    ph->m_origin = pb;
+    ph->m_capacity = size;
+    ph->m_ref_cnt = 1;
+
+    return pb;
+}
+
+NodeMsg* MsgUtil::_creatPreNodeMsg(int preLen, int size) {
+    char* psz = NULL;
+    NodeMsg* pb = NULL;
+    GenMsg_t* ph = NULL;
+    int total = 0;
+    int resLen = 0;
+
+    resLen = _alignment(preLen);
+    total = resLen + _alignment(size) + DEF_MSG_OFFSET; 
+    psz = (char*)malloc(total); 
+    memset(psz, 0, total);
+
+    pb = reinterpret_cast<NodeMsg*>(psz);
+    ph = reinterpret_cast<GenMsg_t*>(psz 
+        + (int)sizeof(NodeMsg) + resLen); 
+
+    initList(&pb->m_list); 
+    pb->m_head = ph;
+    pb->m_size = size;
+    pb->m_pos = 0;
+    pb->m_preLen = preLen;
+    
+    ph->m_origin = pb;
     ph->m_capacity = size;
     ph->m_ref_cnt = 1;
 
@@ -154,45 +188,83 @@ NodeMsg* MsgUtil::creatNodeMsg(int size) {
 
 void MsgUtil::freeNodeMsg(NodeMsg* pb) {
     int ref = 0;
-    char* psz = NULL;
-    NodeMsg* base = NULL;
+    NodeMsg* origin = NULL;
     GenMsg_t* ph = pb->m_head; 
 
-    psz = reinterpret_cast<char*>(ph);
-    base = reinterpret_cast<NodeMsg*>(psz - sizeof(NodeMsg));
+    origin = ph->m_origin;
     
     ref = ATOMIC_DEC_FETCH(&ph->m_ref_cnt);
-    if (base == pb) {
+    if (origin == pb) {
         /* the real node */
         if (0 >= ref) {
-            free(base);
+            free(pb);
         }
     } else {
         /* the referenced node */
         free(pb);
 
         if (0 >= ref) {
-            free(base);
+            free(origin);
         }
     }
 }
 
-NodeMsg* MsgUtil::refNodeMsg(NodeMsg* pb) {
+NodeMsg* MsgUtil::refNodeMsg(NodeMsg* ref) {
+    GenMsg_t* ph = ref->m_head;
+    char* psz = NULL;
+    NodeMsg* pb = NULL;
     int total = sizeof(NodeMsg);
-    NodeMsg* base = NULL;
-    GenMsg_t* ph = pb->m_head;
 
-    base = (NodeMsg*)std::malloc(total); 
-    if (NULL != base) {
-        ATOMIC_INC_FETCH(&ph->m_ref_cnt);
+    psz = (char*)malloc(total);
+    memset(psz, 0, total);
 
-        std::memset(base, 0, total);
-        initList(&base->m_list); 
-        base->m_size = pb->m_size;
-        base->m_pos = 0;
-        base->m_head = ph;
+    pb = reinterpret_cast<NodeMsg*>(psz);
+    initList(&pb->m_list); 
+    pb->m_size = ref->m_size;
+    pb->m_pos = 0;
+    pb->m_preLen = 0;
+
+    pb->m_head = ph;
+    ATOMIC_INC_FETCH(&ph->m_ref_cnt);
+
+    return pb;
+}
+
+NodeMsg* MsgUtil::_refPreNodeMsg(int preLen,
+    NodeMsg* ref) {
+    GenMsg_t* ph = ref->m_head;
+    char* psz = NULL;
+    NodeMsg* pb = NULL;
+    int resLen = 0;
+    int total = 0;
+
+    resLen = _alignment(preLen);
+    total = (int)sizeof(NodeMsg) + resLen;
+
+    psz = (char*)malloc(total);
+    memset(psz, 0, total);
+
+    pb = reinterpret_cast<NodeMsg*>(psz);
+    initList(&pb->m_list); 
+    pb->m_size = ref->m_size;
+    pb->m_pos = 0;
+    pb->m_preLen = preLen;
+    
+    pb->m_head = ph;
+    ATOMIC_INC_FETCH(&ph->m_ref_cnt);
+    
+    return pb; 
+}
+
+char* MsgUtil::_getPreHead(int preLen,
+    NodeMsg* pb) {
+    char* psz = NULL;
+    
+    if (0 < preLen && preLen == pb->m_preLen) {
+        psz = reinterpret_cast<char*>(pb);
+        psz += sizeof(NodeMsg);
         
-        return base;
+        return psz;
     } else {
         return NULL;
     }
@@ -206,11 +278,7 @@ NodeMsg* MsgUtil::toNodeMsg(LList* node) {
     return reinterpret_cast<NodeMsg*>(node);
 }
 
-const NodeMsg* MsgUtil::toNodeMsg(const LList* node) {
-    return reinterpret_cast<const NodeMsg*>(node);
-}
-
-char* MsgUtil::getMsg(const NodeMsg* pb) {
+char* MsgUtil::getMsg(NodeMsg* pb) {
     return pb->m_head->m_body;
 }
 
@@ -232,5 +300,57 @@ void MsgUtil::setMsgPos(NodeMsg* pb, int pos) {
 
 void MsgUtil::skipMsgPos(NodeMsg* pb, int pos) {
     pb->m_pos += pos;
+}
+
+
+NodeMsg* MsgTool::allocMsg(int total) {
+    return MsgUtil::creatNodeMsg(total);;
+}
+
+void MsgTool::freeMsg(NodeMsg* pMsg) {
+    MsgUtil::freeNodeMsg(pMsg);
+}
+
+char* MsgTool::getMsg(NodeMsg* pb) {
+    return MsgUtil::getMsg(pb);
+}
+
+bool MsgTool::completedMsg(NodeMsg* pb) {
+    return MsgUtil::completedMsg(pb);
+}
+
+int MsgTool::getMsgSize(const NodeMsg* pb) {
+    return MsgUtil::getMsgSize(pb);
+}
+
+int MsgTool::getMsgPos(const NodeMsg* pb) {
+    return MsgUtil::getMsgPos(pb);
+}
+
+void MsgTool::setMsgPos(NodeMsg* pb, int pos) {
+    MsgUtil::setMsgPos(pb, pos);
+}
+
+void MsgTool::skipMsgPos(NodeMsg* pb, int pos) {
+    MsgUtil::skipMsgPos(pb, pos);
+}
+
+NodeMsg* MsgTool::refNodeMsg(NodeMsg* pb) {
+    return MsgUtil::refNodeMsg(pb);
+}
+
+char* MsgTool::_getPreHead(int preLen, 
+    NodeMsg* pb) {
+    return MsgUtil::_getPreHead(preLen, pb);
+}
+
+NodeMsg* MsgTool::_creatPreMsg(
+    int preLen, int size) {
+    return MsgUtil::_creatPreNodeMsg(preLen, size);
+}
+
+NodeMsg* MsgTool::_refPreMsg(
+    int preLen, NodeMsg* ref) {
+    return MsgUtil::_refPreNodeMsg(preLen, ref);
 }
 

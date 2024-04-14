@@ -1,7 +1,6 @@
 #include"sockframe.h"
 #include"director.h"
-#include"msgutil.h"
-#include"misc.h"
+#include"msgtool.h"
 
 
 struct SockFrame::_intern {
@@ -53,42 +52,6 @@ void SockFrame::destroy(SockFrame* frame) {
     }
 }
 
-NodeMsg* SockFrame::creatNodeMsg(int size) {
-    return MsgUtil::creatNodeMsg(size);
-}
-
-void SockFrame::freeNodeMsg(NodeMsg* pb) {
-    MsgUtil::freeNodeMsg(pb);
-}
-
-bool SockFrame::completedMsg(NodeMsg* pb) {
-    return MsgUtil::completedMsg(pb);
-}
-
-char* SockFrame::getMsg(const NodeMsg* pb) {
-    return MsgUtil::getMsg(pb);
-}
-
-NodeMsg* SockFrame::refNodeMsg(NodeMsg* pb) {
-    return MsgUtil::refNodeMsg(pb);
-}
-
-int SockFrame::getMsgSize(const NodeMsg* pb) {
-    return MsgUtil::getMsgSize(pb);
-}
-
-int SockFrame::getMsgPos(const NodeMsg* pb) {
-    return MsgUtil::getMsgPos(pb);
-}
-
-void SockFrame::setMsgPos(NodeMsg* pb, int pos) {
-    MsgUtil::setMsgPos(pb, pos);
-}
-
-void SockFrame::skipMsgPos(NodeMsg* pb, int pos) {
-    MsgUtil::skipMsgPos(pb, pos);
-}
-
 int SockFrame::init() {
     int ret = 0;
     _intern* intern = NULL;
@@ -129,15 +92,27 @@ void SockFrame::wait() {
     m_intern->director.wait();
 }
 
-void SockFrame::setProto(SockProto* proto) {
-    m_intern->director.setProto(proto);
-}
-
 void SockFrame::setTimeout(unsigned rd_timeout,
     unsigned wr_timeout) {
     m_intern->director.setTimeout(rd_timeout,
         wr_timeout);
 }
+
+long SockFrame::getExtra(int fd) {
+    return m_intern->director.getExtra(fd);
+}
+
+void SockFrame::getSpeed(int fd, unsigned& rd_thresh,
+        unsigned& wr_thresh) {
+    m_intern->director.getSpeed(fd, rd_thresh,
+        wr_thresh);
+}
+
+void SockFrame::setSpeed(int fd, unsigned rd_thresh, 
+        unsigned wr_thresh) {
+    m_intern->director.setSpeed(fd, rd_thresh,
+        wr_thresh);
+} 
 
 int SockFrame::sendMsg(int fd, NodeMsg* pMsg) {
     return m_intern->director.sendMsg(fd, pMsg);
@@ -151,25 +126,27 @@ void SockFrame::closeData(int fd) {
     m_intern->director.notifyClose(fd);
 }
 
+void SockFrame::undelayRead(int fd) {
+    m_intern->director.undelayRead(fd);
+}
+
 int SockFrame::creatSvr(const char szIP[], int port, 
-    ISockSvr* svr, long data2, 
-    unsigned rd_thresh, unsigned wr_thresh) {
+    ISockSvr* svr, long data2) {
     return m_intern->director.creatSvr(szIP, port,
-        svr, data2, rd_thresh, wr_thresh);
+        svr, data2);
 }
 
-void SockFrame::sheduleCli(unsigned delay, const char szIP[],
-    int port, ISockCli* base, long data2,
-    unsigned rd_thresh, unsigned wr_thresh) {
-    m_intern->director.sheduleCli(delay, szIP, port,
-        base, data2, rd_thresh, wr_thresh);
+int SockFrame::sheduleCli(unsigned delay, 
+    const char szIP[], int port, 
+    ISockCli* base, long data2) {
+    return m_intern->director.sheduleCli(delay, 
+        szIP, port, base, data2);
 }
 
-int SockFrame::creatCli(const char szIP[], int port,
-    ISockCli* base, long data2, 
-    unsigned rd_thresh, unsigned wr_thresh) {
-    return m_intern->director.creatCli(szIP, port,
-        base, data2, rd_thresh, wr_thresh);
+int SockFrame::creatCli(const char szIP[],
+    int port, ISockCli* base, long data2) {
+    return m_intern->director.creatCli(szIP,
+        port, base, data2);
 }
 
 int SockFrame::schedule(unsigned delay, TFunc func,
@@ -180,10 +157,10 @@ int SockFrame::schedule(unsigned delay, TFunc func,
 static void sigHandler(int sig) {
     LOG_ERROR("*******sig=%d| msg=catch a signal|", sig);
 
-    for (int i=0; i<MiscTool::maxSig(); ++i) {
-        if (MiscTool::isCoreSig(sig)) {
-            MiscTool::armSig(sig, NULL);
-            MiscTool::raise(sig);
+    for (int i=0; i<MsgTool::maxSig(); ++i) {
+        if (MsgTool::isCoreSig(sig)) {
+            MsgTool::armSig(sig, NULL);
+            MsgTool::raise(sig);
             return;
         }
     }
@@ -194,8 +171,8 @@ static void sigHandler(int sig) {
 }
 
 void armSigs() {
-    for (int i=1; i<MiscTool::maxSig(); ++i) {
-        MiscTool::armSig(i, &sigHandler);
+    for (int i=1; i<MsgTool::maxSig(); ++i) {
+        MsgTool::armSig(i, &sigHandler);
     }
 }
 

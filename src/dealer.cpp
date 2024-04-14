@@ -370,16 +370,16 @@ void Dealer::procCmd(NodeCmd* pCmd) {
 void Dealer::procConnector(GenData* data) {
     int fd = m_center->getFd(data);
     int ret = 0;
+    ConnOption opt;
 
-    ret = m_center->onConnect(data);
+    memset(&opt, 0, sizeof(opt));
+    ret = m_center->onConnect(data, opt);
     if (0 == ret) {
-        /* reset to write */
-        m_director->initSock(data);
-        m_center->setIdleTimeout(data); 
+        m_center->initSock(data); 
         
-        activate(data);
-        m_director->sendCommCmd(ENUM_DIR_SENDER, ENUM_CMD_ADD_FD, fd);
-        m_director->sendCommCmd(ENUM_DIR_RECVER, ENUM_CMD_ADD_FD, fd); 
+        m_director->setSpeed(fd, opt.m_rd_thresh, opt.m_wr_thresh); 
+        m_director->activateSock(data, opt.m_delay);
+         
     } else {
         m_director->closeData(data);
     } 
@@ -389,20 +389,20 @@ void Dealer::onAccept(GenData* listenData,
     int newFd, const char ip[], int port) {
     GenData* childData = NULL;
     int ret = 0;
+    AccptOption opt;
 
     childData = m_center->reg(newFd);
-    if (NULL != childData) { 
-        ret = m_center->onNewSock(listenData, newFd);
-        if (0 == ret) {
-            m_director->initSock(childData); 
-            m_center->refData(childData, listenData); 
-            m_center->setIdleTimeout(childData);
-            m_center->setAddr(childData, ip, port);
-
-            /* start all */
-            activate(childData);
-            m_director->sendCommCmd(ENUM_DIR_SENDER, ENUM_CMD_ADD_FD, newFd);
-            m_director->sendCommCmd(ENUM_DIR_RECVER, ENUM_CMD_ADD_FD, newFd); 
+    if (NULL != childData) {
+        m_center->setAddr(childData, ip, port);
+        
+        memset(&opt, 0, sizeof(opt));
+        ret = m_center->onNewSock(listenData, newFd, opt);
+        if (0 == ret) { 
+            m_center->initSock(childData); 
+            m_center->setData(childData, opt.m_sock, opt.m_extra);
+            
+            m_director->setSpeed(newFd, opt.m_rd_thresh, opt.m_wr_thresh); 
+            m_director->activateSock(childData, opt.m_delay); 
         } else {
             m_director->closeData(childData);
         }

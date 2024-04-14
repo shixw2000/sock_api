@@ -7,10 +7,11 @@
 #include"sockproto.h"
 #include"sockframe.h"
 #include"isockmsg.h"
+#include"msgtool.h"
 
 
-GenSockProto::GenSockProto() {
-    m_frame = SockFrame::instance();
+GenSockProto::GenSockProto(SockFrame* frame) {
+    m_frame = frame;
 }
 
 GenSockProto::~GenSockProto() {
@@ -23,23 +24,23 @@ int GenSockProto::dispatch(int fd, NodeMsg* pMsg) {
     return ret;
 }
 
-bool GenSockProto::parseData2(int fd,
+int GenSockProto::parseData2(int fd,
     SockBuffer*, const char* buf, int size) {
     NodeMsg* pMsg = NULL;
     char* psz = NULL; 
 
-    pMsg = SockFrame::creatNodeMsg(size);
-    psz = SockFrame::getMsg(pMsg);
+    pMsg = MsgTool::allocMsg(size);
+    psz = MsgTool::getMsg(pMsg);
 
     memcpy(psz, buf, size); 
 
-    SockFrame::skipMsgPos(pMsg, size);
+    MsgTool::skipMsgPos(pMsg, size);
     dispatch(fd, pMsg);
 
-    return size; 
+    return 0; 
 }
 
-bool GenSockProto::parseData(int fd,
+int GenSockProto::parseData(int fd,
     SockBuffer* cache, const char* buf, int size) {
     int ret = 0;
     
@@ -54,11 +55,11 @@ bool GenSockProto::parseData(int fd,
             buf += ret;
             size -= ret;
         } else {
-            return false;
+            return ret;
         }
     }
 
-    return true;
+    return 0;
 }
 
 bool GenSockProto::analyseHead(SockBuffer* buffer) {
@@ -68,13 +69,13 @@ bool GenSockProto::analyseHead(SockBuffer* buffer) {
     char* psz = NULL;
     
     size = ph->m_size;
-    if (DEF_MSG_HEAD_SIZE < size) {
-        pMsg = SockFrame::creatNodeMsg(size);
-        psz = SockFrame::getMsg(pMsg);
+    if (DEF_MSG_HEAD_SIZE < size && size < MAX_MSG_SIZE) {
+        pMsg = MsgTool::allocMsg(size);
+        psz = MsgTool::getMsg(pMsg);
 
         memcpy(psz, buffer->m_head, DEF_MSG_HEAD_SIZE); 
 
-        SockFrame::skipMsgPos(pMsg, DEF_MSG_HEAD_SIZE);
+        MsgTool::skipMsgPos(pMsg, DEF_MSG_HEAD_SIZE);
         buffer->m_msg = pMsg;
         return true;
     } else {
@@ -124,9 +125,9 @@ int GenSockProto::parseBody(int fd,
 
     pMsg = buffer->m_msg;
     
-    size = SockFrame::getMsgSize(pMsg);
-    pos = SockFrame::getMsgPos(pMsg);
-    psz = SockFrame::getMsg(pMsg);
+    size = MsgTool::getMsgSize(pMsg);
+    pos = MsgTool::getMsgPos(pMsg);
+    psz = MsgTool::getMsg(pMsg);
     
     psz += pos;
     size -= pos;
@@ -134,7 +135,7 @@ int GenSockProto::parseBody(int fd,
         /* get a completed msg */
         memcpy(psz, input, size);
 
-        SockFrame::skipMsgPos(pMsg, size);
+        MsgTool::skipMsgPos(pMsg, size);
         used += size; 
 
         LOG_DEBUG("parse_msg| fd=%d| len=%d| size=%d| pos=%d|",
@@ -150,44 +151,118 @@ int GenSockProto::parseBody(int fd,
         
         memcpy(psz, input, len);
 
-        SockFrame::skipMsgPos(pMsg, len);
+        MsgTool::skipMsgPos(pMsg, len);
         used += len;
     }
 
     return used;
 }
 
-GenSvr::GenSvr() {
+GenSvr::GenSvr(unsigned rd_thresh, 
+    unsigned wr_thresh) {
     m_frame = SockFrame::instance();
+    m_accpt = new GenAccpt(m_frame);
+
+    m_rd_thresh = rd_thresh;
+    m_wr_thresh = wr_thresh;
 }
 
-int GenSvr::onNewSock(long, int, int) {
+GenSvr::~GenSvr() {
+    if (NULL != m_accpt) {
+        delete m_accpt;
+    }
+}
+
+SockBuffer* GenSvr::allocBuffer() {
+    SockBuffer* buffer = (SockBuffer*)calloc(1, sizeof(SockBuffer));
+
+    return buffer;
+}
+
+void GenSvr::freeBuffer(SockBuffer* buffer) {
+    if (NULL != buffer) {
+        if (NULL != buffer->m_msg) {
+            MsgTool::freeMsg(buffer->m_msg);
+            buffer->m_msg = NULL;
+        }
+        
+        free(buffer);
+    }
+}
+
+int GenSvr::onNewSock(int, int, 
+    AccptOption& opt) {
+    SockBuffer* buffer = allocBuffer();
+
+    opt.m_sock = m_accpt;
+    opt.m_extra = (long)buffer;
+    opt.m_rd_thresh = m_rd_thresh;
+    opt.m_wr_thresh = m_wr_thresh;
+
     return 0;
 }
 
-void GenSvr::onClose(long, int) {
+void GenSvr::onClose(int) { 
 }
 
-int GenSvr::process(long, int hd, NodeMsg* msg) {
+GenSvr::GenAccpt::GenAccpt(SockFrame* frame) {
+    m_frame = frame;
+    m_proto = new GenSockProto(frame);
+}
+
+GenSvr::GenAccpt::~GenAccpt() {
+    if (NULL != m_proto) {
+        delete m_proto;
+    }
+}
+
+void GenSvr::GenAccpt::onClose(int hd) {
+    SockBuffer* buffer = (SockBuffer*)m_frame->getExtra(hd);
+
+    GenSvr::freeBuffer(buffer);
+}
+
+int GenSvr::GenAccpt::process(int hd, NodeMsg* msg) {
     MsgHead_t* head = NULL;
 
-    head = (MsgHead_t*)SockFrame::getMsg(msg);
+    head = (MsgHead_t*)MsgTool::getMsg(msg);
 
     (void)hd;
     (void)head;
     LOG_DEBUG("process_msg| fd=%d| seq=0x%x|",
         hd, head->m_seq++);
 
-    NodeMsg* ref = SockFrame::refNodeMsg(msg);
+    NodeMsg* ref = MsgTool::refNodeMsg(msg);
     m_frame->sendMsg(hd, ref);
     return 0;
 }
 
+int GenSvr::GenAccpt::parseData(int fd, 
+    const char* buf, int size) {
+    SockBuffer* cache = (SockBuffer*)m_frame->getExtra(fd);
+    int ret = 0;
+    
+    ret = m_proto->parseData(fd, cache, buf, size);
+    return ret;
+}
 
-GenCli::GenCli(int pkgSize, int pkgCnt) {
+
+GenCli::GenCli(unsigned rd_thresh, 
+        unsigned wr_thresh,
+        int pkgSize, int pkgCnt) { 
+    m_frame = SockFrame::instance();
+    m_proto = new GenSockProto(m_frame);
+    
+    m_rd_thresh = rd_thresh;
+    m_wr_thresh = wr_thresh;
     m_pkg_size = pkgSize;
     m_pkg_cnt = pkgCnt;
-    m_frame = SockFrame::instance();
+}
+
+GenCli::~GenCli() {
+    if (NULL != m_proto) {
+        delete m_proto;
+    }
 }
 
 NodeMsg* GenCli::genMsg(int size) {
@@ -196,8 +271,8 @@ NodeMsg* GenCli::genMsg(int size) {
     NodeMsg* pMsg = NULL;
     MsgHead_t* ph = NULL;
 
-    pMsg = SockFrame::creatNodeMsg(total);
-    ph = (MsgHead_t*)SockFrame::getMsg(pMsg);
+    pMsg = MsgTool::allocMsg(total);
+    ph = (MsgHead_t*)MsgTool::getMsg(pMsg);
     ph->m_size = total;
     ph->m_seq = ++seq;
     ph->m_version = DEF_MSG_VER;
@@ -205,40 +280,64 @@ NodeMsg* GenCli::genMsg(int size) {
     return pMsg;
 }
 
-void GenCli::onClose(long, int) {
+void GenCli::onClose(int hd) {
+    SockBuffer* cache = (SockBuffer*)m_frame->getExtra(hd);
+    
+    GenSvr::freeBuffer(cache);
 }
 
-void GenCli::onConnFail(long, int) {
+void GenCli::onConnFail(long extra, int) {
+    SockBuffer* cache = (SockBuffer*)extra;
+    
+    GenSvr::freeBuffer(cache);
 }
 
-int GenCli::onConnOK(long, int hd) {
+int GenCli::onConnOK(int hd,
+    ConnOption& opt) {
     NodeMsg* pMsg = NULL;
 
-    (void)hd;
     LOG_INFO("conn_ok| fd=%d| pkg_cnt=%d| pkg_size=%d|",
         hd, m_pkg_cnt, m_pkg_size);
     
+    opt.m_rd_thresh = m_rd_thresh;
+    opt.m_wr_thresh = m_wr_thresh;
+        
     for (int i=0; i<m_pkg_cnt; ++i) {
         pMsg = genMsg(m_pkg_size);
         m_frame->sendMsg(hd, pMsg);
     }
-    
+
     return 0;
 }
 
-int GenCli::process(long, int hd, NodeMsg* msg) {
+int GenCli::process(int hd, NodeMsg* msg) {
     MsgHead_t* head = NULL;
 
-    head = (MsgHead_t*)SockFrame::getMsg(msg);
+    head = (MsgHead_t*)MsgTool::getMsg(msg);
 
     (void)hd;
     (void)head;
     LOG_DEBUG("cli_msg| fd=%d| seq=0x%x|",
         hd, head->m_seq++);
 
-    NodeMsg* ref = SockFrame::refNodeMsg(msg);
+    NodeMsg* ref = MsgTool::refNodeMsg(msg);
     m_frame->sendMsg(hd, ref);
     return 0;
+}
+
+int GenCli::parseData(int fd, 
+    const char* buf, int size) {
+    SockBuffer* cache = (SockBuffer*)m_frame->getExtra(fd);
+    int ret = 0;
+    
+    ret = m_proto->parseData(fd, cache, buf, size);
+    return ret;
+}
+
+long GenCli::genExtra() {
+    SockBuffer* cache = GenSvr::allocBuffer();
+
+    return (long)cache;
 }
 
 

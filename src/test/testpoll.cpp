@@ -8,27 +8,23 @@ int testSrv(const char ip[], int port,
     unsigned rd_timeout, unsigned wr_timeout) {
     int ret = 0;
     SockFrame* frame = NULL;
-    SockProto* proto = NULL;
     ISockSvr* psvr = NULL;
 
     LOG_INFO("test poll|");
 
     frame = SockFrame::instance();
-    proto = new GenSockProto;
-    psvr = new GenSvr;
+    psvr = new GenSvr(rd_thresh, wr_thresh);
 
     do { 
-        frame->setProto(proto);
         frame->setTimeout(rd_timeout, wr_timeout);
-        frame->creatSvr(ip, port, psvr, 
-            0, rd_thresh, wr_thresh);
+        frame->creatSvr(ip, port, psvr, 0);
 
         frame->start();
         frame->wait();
     } while (0);
 
+    delete psvr;
     SockFrame::destroy(frame);
-    delete proto;
 
     LOG_INFO("ret=%d| end test svr|", ret);
     
@@ -39,29 +35,26 @@ int testCli(const char ip[], int port,
     int cliCnt, int pkgSize, int pkgCnt) {
     int ret = 0;
     SockFrame* frame = NULL;
-    SockProto* proto = NULL;
-    ISockCli* pcli = NULL;
+    GenCli* pcli = NULL;
 
     LOG_INFO("test poll|");
 
     frame = SockFrame::instance();
-    proto = new GenSockProto;
-    pcli = new GenCli(pkgSize, pkgCnt);
+    pcli = new GenCli(0, 0, pkgSize, pkgCnt);
 
     do { 
-        frame->setProto(proto);
         frame->setTimeout(60, 60);
 
         for (int i=0; i<cliCnt; ++i) {
-            frame->sheduleCli(1, ip, port, pcli, 0);
+            frame->sheduleCli(1, ip, port, pcli, pcli->genExtra());
         }
         
         frame->start();
         frame->wait();
     } while (0);
 
+    delete pcli;
     SockFrame::destroy(frame);
-    delete proto;
 
     LOG_INFO("ret=%d| end test cli|", ret);
     

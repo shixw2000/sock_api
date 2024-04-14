@@ -1,5 +1,5 @@
 #include"../ticktimer.h"
-#include"../misc.h"
+#include"msgtool.h"
 
 
 static void f1(long arg, long arg2) {
@@ -40,6 +40,6 @@ void testTimer() {
 
     LOG_INFO("end here.");
     
-    MiscTool::pause();
+    MsgTool::pause();
 } 
 

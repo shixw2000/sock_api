@@ -4,7 +4,6 @@
 
 
 typedef void (*TFunc)(long, long);
-class SockProto;
 
 class SockFrame {
 private:
@@ -20,42 +19,37 @@ public:
     static SockFrame* instance();
     static void destroy(SockFrame*); 
 
-    /* msg functions */
-    static NodeMsg* creatNodeMsg(int size);
-    static void freeNodeMsg(NodeMsg* pb);
-
-    static bool completedMsg(NodeMsg* pb);
-    static char* getMsg(const NodeMsg* pb); 
-    static NodeMsg* refNodeMsg(NodeMsg* pb);
-
-    static int getMsgSize(const NodeMsg* pb); 
-    static int getMsgPos(const NodeMsg* pb);
-    static void setMsgPos(NodeMsg* pb, int pos);
-    static void skipMsgPos(NodeMsg* pb, int pos);
-
     void start();
     void stop();
     void wait();
 
-    void setProto(SockProto* proto);
+    /* unit: seconds */
     void setTimeout(unsigned rd_timeout, 
         unsigned wr_timeout);
+
+    long getExtra(int fd);
+
+    /* unit: kilo bytes */
+    void getSpeed(int fd, unsigned& rd_thresh,
+        unsigned& wr_thresh);
+    
+    /* unit: kilo bytes */
+    void setSpeed(int fd, unsigned rd_thresh, 
+        unsigned wr_thresh);
     
     int sendMsg(int fd, NodeMsg* pMsg);
     int dispatch(int fd, NodeMsg* pMsg);
     void closeData(int fd);
+    void undelayRead(int fd);
 
     int creatSvr(const char szIP[], int port, 
-        ISockSvr* svr, long data2, 
-        unsigned rd_thresh = 0, unsigned wr_thresh = 0);
+        ISockSvr* svr, long data2);
 
-    void sheduleCli(unsigned delay, const char szIP[], int port,
-        ISockCli* base, long data2, 
-        unsigned rd_thresh = 0, unsigned wr_thresh = 0); 
+    int sheduleCli(unsigned delay, const char szIP[], int port,
+        ISockCli* base, long data2); 
 
     int creatCli(const char szIP[], int port,
-        ISockCli* base, long data2,
-        unsigned rd_thresh = 0, unsigned wr_thresh = 0);
+        ISockCli* base, long data2);
 
     int schedule(unsigned delay, TFunc func, long data, long data2);
 

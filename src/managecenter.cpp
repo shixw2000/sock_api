@@ -23,8 +23,8 @@ struct GenData {
     TimerObj m_rd_flowctl;
     TimerObj m_wr_flowctl;
     
+    ISockBase* m_sock;
     long m_extra;
-    long m_data2;
     
     int m_fd; 
 
@@ -53,7 +53,6 @@ struct GenData {
     unsigned m_rd_last_time;
     unsigned m_wr_last_time; 
     
-    SockBuffer m_rd_buf;
     int m_port;
     char m_szIP[DEF_IP_SIZE];
 };
@@ -64,7 +63,6 @@ ManageCenter::ManageCenter() : m_cap(MAX_FD_NUM) {
     m_lock = NULL;
     m_cache = NULL;
     m_datas = NULL;
-    m_proto = NULL;
 
     m_conn_timeout = 3;
     m_rd_timeout = 60;
@@ -93,12 +91,6 @@ int ManageCenter::init() {
 
 void ManageCenter::finish() {
     finishQue(&m_pool);
-
-    if (NULL != m_proto) {
-        
-        //delete m_proto;
-        m_proto = NULL;
-    }
     
     if (NULL != m_datas) {
         free(m_datas);
@@ -181,18 +173,10 @@ bool ManageCenter::isClosed(GenData* data) const {
 
 bool ManageCenter::markClosed(GenData* data) {
     return 0 == data->m_closing++;
-}
+} 
 
-void ManageCenter::setData(GenData* data, long extra, long data2) {
-    data->m_extra = extra; 
-    data->m_data2 = data2;
-}
-
-void ManageCenter::refData(GenData* dstData, GenData* srcData) {
-    dstData->m_extra = srcData->m_extra; 
-    dstData->m_data2 = srcData->m_data2;
-    dstData->m_rd_thresh = srcData->m_rd_thresh; 
-    dstData->m_wr_thresh = srcData->m_wr_thresh;
+long ManageCenter::getExtra(const GenData* data) {
+    return data->m_extra;
 }
 
 void ManageCenter::setStat(EnumDir enDir, GenData* data, int stat) {
@@ -610,8 +594,8 @@ unsigned ManageCenter::getWrThresh(GenData* data) const {
 
 void ManageCenter::setSpeed(GenData* data, 
     unsigned rd_thresh, unsigned wr_thresh) {
-    data->m_rd_thresh = rd_thresh * KILO;
-    data->m_wr_thresh = wr_thresh * KILO;
+    data->m_rd_thresh = rd_thresh;
+    data->m_wr_thresh = wr_thresh;
 }
 
 void ManageCenter::setConnTimeout(GenData* data) {
@@ -625,8 +609,8 @@ void ManageCenter::setIdleTimeout(GenData* data) {
 
 void ManageCenter::setTimeout(unsigned rd_timeout,
     unsigned wr_timeout) {
-    m_rd_timeout = rd_timeout * DEF_NUM_PER_SEC;
-    m_wr_timeout = wr_timeout * DEF_NUM_PER_SEC;
+    m_rd_timeout = rd_timeout;
+    m_wr_timeout = wr_timeout;
 }
 
 void ManageCenter::setAddr(GenData* data, 
@@ -635,13 +619,19 @@ void ManageCenter::setAddr(GenData* data,
     strncpy(data->m_szIP, szIP, sizeof(data->m_szIP)-1);
 }
 
+void ManageCenter::setData(GenData* data,
+    ISockBase* sock, long extra) {
+    data->m_sock = sock;
+    data->m_extra = extra; 
+}
+
 GenData* ManageCenter::reg(int fd) {
     GenData* data = NULL;
 
     if (0 <= fd && fd < m_cap && !exists(fd)) {
         data = _allocData();
         if (NULL != data) { 
-            data->m_fd = fd;
+            data->m_fd = fd; 
             m_datas[fd] = data;
             
             return data;
@@ -761,38 +751,36 @@ bool ManageCenter::chkExpire(EnumDir enDir,
     return (*pe - now) > *pt;
 }
 
-void ManageCenter::setProto(SockProto* proto) {
-    m_proto = proto;
-}
-
 int ManageCenter::recvMsg(GenData* data, int max) {
-    SockBuffer* buffer = &data->m_rd_buf;
     int fd = getFd(data);
+    ISockComm* comm = NULL;
+    int rdLen = 0;
     int ret = 0;
-    bool bOk = false;
 
-    if (0 == max || max > MAX_BUFF_SIZE) {
-        max = MAX_BUFF_SIZE;
+    comm = dynamic_cast<ISockComm*>(data->m_sock);
+    if (NULL != comm) {
+        if (0 == max || max > MAX_BUFF_SIZE) {
+            max = MAX_BUFF_SIZE;
+        } 
+        
+        rdLen = SockTool::recvTcp(fd, m_buf, max);
+        if (0 < rdLen) {
+            ret = comm->parseData(fd, m_buf, rdLen);
+            if (0 == ret) {
+                /* parse ok */
+            } else {
+                /* parse error */
+                rdLen = -3;
+            }
+        } 
+    } else {
+        rdLen = -1;
     }
     
-    ret = SockTool::recvTcp(fd, m_buf, max);
-    if (0 < ret) {
-        bOk = m_proto->parseData(fd, buffer, m_buf, ret);
-        if (!bOk) {
-            ret = -1;
-        }
-    }
-    
-    return ret;
+    return rdLen;
 }
 
-void ManageCenter::releaseRd(GenData* data) {
-    SockBuffer* buffer = &data->m_rd_buf;
-    
-    if (NULL != buffer->m_msg) {
-        MsgUtil::freeNodeMsg(buffer->m_msg);
-        buffer->m_msg = NULL;
-    }
+void ManageCenter::releaseRd(GenData*) {
 }
 
 void ManageCenter::releaseWr(GenData* data) {
@@ -900,47 +888,80 @@ LList* ManageCenter::getWrPrivQue(GenData* data) const {
     return &data->m_wr_msg_que_priv;
 }
 
-int ManageCenter::onNewSock(GenData* data, int newFd) {
-    ISockSvr* svr = (ISockSvr*)data->m_extra;
-    long data2 = data->m_data2;
-    int listenFd = data->m_fd;
-    int ret = 0;
+void ManageCenter::initSock(GenData* data) {
+    setIdleTimeout(data); 
+    
+    setCb(ENUM_DIR_RECVER, data, ENUM_RD_SOCK);
+    setStat(ENUM_DIR_RECVER, data, ENUM_STAT_INIT);
+    
+    /* reset to begin write */
+    setCb(ENUM_DIR_SENDER, data, ENUM_WR_SOCK);
+    setStat(ENUM_DIR_SENDER, data, ENUM_STAT_INIT);
+    
+    /* reset to begin deal */
+    setCb(ENUM_DIR_DEALER, data, ENUM_DEAL_SOCK);
+    setStat(ENUM_DIR_DEALER, data, ENUM_STAT_DISABLE); 
+}
 
-    ret = svr->onNewSock(data2, listenFd, newFd);
+int ManageCenter::onNewSock(GenData* parentData,
+    int newFd, AccptOption& opt) {
+    ISockSvr* svr = NULL;
+    int ret = 0;
+    int listenFd = getFd(parentData);
+
+    svr = dynamic_cast<ISockSvr*>(parentData->m_sock);
+    if (NULL != svr) { 
+        ret = svr->onNewSock(listenFd, newFd, opt);
+        if (0 == ret && NULL == opt.m_sock) {
+            /* check valid */
+            ret = -2;
+        } 
+    } else {
+        ret = -1;
+    }
+
     return ret;
 }
 
-int ManageCenter::onConnect(GenData* data) {
-    ISockCli* cli = (ISockCli*)data->m_extra; 
-    long data2 = data->m_data2;
+int ManageCenter::onConnect(GenData* data, 
+    ConnOption& opt) {
+    ISockCli* cli = NULL; 
     int fd = data->m_fd;
     int ret = 0;
 
-    if (0 == data->m_wr_conn) {
-        ret = cli->onConnOK(data2, fd);
+    cli = dynamic_cast<ISockCli*>(data->m_sock);
+    if (NULL != cli) {
+        if (0 == data->m_wr_conn) {
+            ret = cli->onConnOK(fd, opt);
+        } else {
+            ret = data->m_wr_conn;
+            cli->onConnFail(data->m_extra, ret);
+        }
     } else {
-        cli->onConnFail(data2, fd);
-        ret = data->m_wr_conn;
+        ret = -1;
     }
 
     return ret;
 }
 
 int ManageCenter::onProcess(GenData* data, NodeMsg* msg) {
-    ISockBase* base = (ISockBase*)data->m_extra;
-    long data2 = data->m_data2;
+    ISockComm* comm = NULL;
     int fd = data->m_fd;
     int ret = 0;
 
-    ret = base->process(data2, fd, msg);
+    comm = dynamic_cast<ISockComm*>(data->m_sock);
+    if (NULL != comm) {
+        ret = comm->process(fd, msg); 
+    }
+    
     return ret;
 }
 
 void ManageCenter::onClose(GenData* data) {
-    ISockBase* base = (ISockBase*)data->m_extra;
-    long data2 = data->m_data2;
     int fd = data->m_fd;
 
-    base->onClose(data2, fd);
+    if (NULL != data->m_sock) {
+        data->m_sock->onClose(fd);
+    }
 }
 

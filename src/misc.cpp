@@ -7,6 +7,7 @@
 #include<cstdlib>
 #include<signal.h>
 #include<sys/types.h>
+#include<sys/syscall.h>
 #include<sys/socket.h>
 #include<sys/eventfd.h>
 #include<sys/timerfd.h>
@@ -15,7 +16,7 @@
 #include<errno.h>
 #include<fcntl.h> 
 #include"misc.h"
-#include"cthread.h"
+#include"msgtool.h"
 
 
 #define __INIT_RUN__ __attribute__((unused, constructor))
@@ -57,7 +58,7 @@ static int timeStamp(char stamp[], int max) {
     time_t in;
     struct tm out;
 
-    MiscTool::getTime(&ct1);
+    MsgTool::getTime(&ct1);
 
     in = ct1.m_sec;
     memset(&out, 0, sizeof(out));
@@ -67,7 +68,7 @@ static int timeStamp(char stamp[], int max) {
         out.tm_mday, out.tm_hour,
         out.tm_min, out.tm_sec,
         ct1.m_msec,
-        CThread::getTid());
+        MsgTool::getTid());
     if (0 < max && 0 < cnt) {
         if (cnt < max) {
             return cnt;
@@ -103,10 +104,68 @@ void log_screen(const char format[], ...) {
     fprintf(stderr, "%s\n", buf);
 }
 
-void MiscTool::getTime(ClockTime* ct) {
-    getClock(ct);
+void MsgTool::getTime(ClockTime* ct) {
+    MiscTool::getClock(ct);
 
-    clock2Time(ct, ct);
+    MiscTool::clock2Time(ct, ct);
+}
+
+void MsgTool::pause() {
+    ::pause();
+}
+
+int MsgTool::getTid() {
+    int id = 0;
+
+    id = syscall(SYS_gettid);
+    return id;
+}
+
+int MsgTool::getPid() {
+    int id = 0;
+
+    id = (int)getpid();
+    return id;
+}
+
+void MsgTool::armSig(int sig, PFunSig fn) {
+    struct sigaction act;
+
+    memset(&act, 0, sizeof(act));
+    sigemptyset(&act.sa_mask);
+
+    act.sa_flags = SA_RESTART;
+
+    if (NULL != fn) {
+        act.sa_handler = fn;
+    } else {
+        act.sa_handler = SIG_DFL;
+    }
+  
+    sigaction(sig, &act, NULL);
+}
+
+void MsgTool::raise(int sig) {
+    ::raise(sig);
+}
+
+bool MsgTool::isCoreSig(int sig) {
+    static const int g_core_signals[] = {
+        SIGQUIT, SIGILL, SIGABRT, SIGFPE, 
+        SIGSEGV, SIGBUS, SIGSYS
+    };
+
+    for (int i=0; i<ARR_CNT(g_core_signals); ++i) {
+        if (g_core_signals[i] == sig) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+int MsgTool::maxSig() {
+    return SIGRTMIN;
 }
 
 void MiscTool::getClock(ClockTime* ct) {
@@ -138,10 +197,6 @@ long MiscTool::diffMsec(const ClockTime* ct1,
     long t2 = ct2->m_sec * 1000 + ct2->m_msec;
 
     return t1 - t2;
-}
-
-void MiscTool::pause() {
-    ::pause();
 }
 
 unsigned long long MiscTool::read8Bytes(int fd) {
@@ -250,45 +305,7 @@ int MiscTool::creatPipes(int (*pfds)[2]) {
     return ret;
 }
 
-void MiscTool::armSig(int sig, PFunSig fn) {
-    struct sigaction act;
 
-    memset(&act, 0, sizeof(act));
-    sigemptyset(&act.sa_mask);
-
-    act.sa_flags = SA_RESTART;
-
-    if (NULL != fn) {
-        act.sa_handler = fn;
-    } else {
-        act.sa_handler = SIG_DFL;
-    }
-  
-    sigaction(sig, &act, NULL);
-}
-
-void MiscTool::raise(int sig) {
-    ::raise(sig);
-}
-
-bool MiscTool::isCoreSig(int sig) {
-    static const int g_core_signals[] = {
-        SIGQUIT, SIGILL, SIGABRT, SIGFPE, 
-        SIGSEGV, SIGBUS, SIGSYS
-    };
-
-    for (int i=0; i<ARR_CNT(g_core_signals); ++i) {
-        if (g_core_signals[i] == sig) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-int MiscTool::maxSig() {
-    return SIGRTMIN;
-}
 
 int SockTool::creatSock() {
     int fd = -1;
@@ -429,6 +446,30 @@ void SockTool::closeSock(int fd) {
     }
 }
 
+int SockTool::chkAddr(const char szIP[], int port) {
+    int ret = 0;
+    char buf[256] = {0};
+    
+    if (0 < port && port < 0xFFFF) {
+        ret = inet_pton(AF_INET, szIP, buf);
+        if (1 == ret) {
+            return 0;
+        } else if (0 == ret) {
+            LOG_ERROR("chk_addr| ip=%s:%d| err=invalid ip|",
+                szIP, port);
+            return -3;
+        } else {
+            LOG_ERROR("chk_addr| ip=%s:%d| err=invalid format|",
+                szIP, port);
+            return -2;
+        }
+    } else {
+        LOG_ERROR("chk_addr| ip=%s:%d| err=invalid port|",
+            szIP, port);
+        return -1;
+    }
+}
+
 int SockTool::ip2Addr(SockParam* param) {
     int ret = 0;
     struct sockaddr_in* addr = (struct sockaddr_in*)param->m_addr;
@@ -508,7 +549,7 @@ int SockTool::sendTcp(int fd, const void* psz, int max) {
         cnt = send(fd, psz, max, MSG_NOSIGNAL);
         if (0 <= cnt) {
             LOG_DEBUG("sendTcp| fd=%d| maxlen=%d| wrlen=%d| msg=ok|",
-                fd, max, ret);
+                fd, max, cnt);
             ret = cnt;
         } else if (EAGAIN == errno) {
             LOG_DEBUG("sendTcp| fd=%d| maxlen=%d| msg=write block|",

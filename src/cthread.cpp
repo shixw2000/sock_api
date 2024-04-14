@@ -1,10 +1,10 @@
 #include<unistd.h>
-#include<sys/syscall.h>
 #include<sys/types.h>
 #include<pthread.h>
 #include<cstring>
 #include"shareheader.h"
 #include"cthread.h"
+#include"msgtool.h"
 
 
 CThread::CThread() {
@@ -61,22 +61,15 @@ void* CThread::_activate(void* arg) {
     return (void*)NULL;
 }
 
-int CThread::getTid() {
-    int id = 0;
-
-    id = syscall(SYS_gettid);
-    return id;
-}
-
 void CThread::proc() { 
     LOG_INFO("start to run| name=%s| tid=%d| id=0x%x|", 
-        m_name, getTid(), m_thrId);
+        m_name, MsgTool::getTid(), m_thrId);
 
     m_isRun = true;
     run(); 
     m_isRun = false;
     
     LOG_INFO("end to run| name=%s| tid=%d| id=0x%lx|", 
-        m_name, getTid(), m_thrId);
+        m_name, MsgTool::getTid(), m_thrId);
 }
 

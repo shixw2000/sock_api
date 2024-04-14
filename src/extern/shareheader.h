@@ -36,6 +36,8 @@ static const int DEF_IP_SIZE = 32;
 static const int MAX_ADDR_SIZE = 256; 
 static const unsigned DEF_MSG_VER = 0x0814;
 static const unsigned DEF_TIMEOUT_SEC = 60;
+static const unsigned KILO = 1024;
+
 
 #endif
 
