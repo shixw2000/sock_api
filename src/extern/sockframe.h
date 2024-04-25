@@ -3,7 +3,7 @@
 #include"isockapi.h"
 
 
-typedef void (*TFunc)(long, long);
+typedef bool (*TimerFunc)(long, long);
 
 class SockFrame {
 private:
@@ -15,9 +15,12 @@ private:
     int init();
     void finish();
 
+    bool chkValid() const;
+
 public:
-    static SockFrame* instance();
-    static void destroy(SockFrame*); 
+    static SockFrame* instance(); 
+    static void creat();
+    static void destroy(SockFrame* frame); 
 
     void start();
     void stop();
@@ -51,10 +54,12 @@ public:
     int creatCli(const char szIP[], int port,
         ISockCli* base, long data2);
 
-    int schedule(unsigned delay, TFunc func, long data, long data2);
+    int schedule(unsigned delay, unsigned interval,
+        TimerFunc func, long data, long data2 = 0);
 
 private:
     _intern* m_intern;
+    bool m_bValid;
 };
 
 extern void armSigs();

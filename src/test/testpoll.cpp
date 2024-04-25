@@ -1,60 +1,54 @@
 #include<cstdlib>
-#include"sockframe.h"
+#include<cstdio>
 #include"sockproto.h"
+#include"misc.h"
+#include"config.h"
 
 
-int testSrv(const char ip[], int port,
-    unsigned rd_thresh, unsigned wr_thresh,
-    unsigned rd_timeout, unsigned wr_timeout) {
+int testSrv(Config* conf) {
     int ret = 0;
-    SockFrame* frame = NULL;
-    ISockSvr* psvr = NULL;
+    GenSvr* psvr = NULL;
 
     LOG_INFO("test poll|");
 
-    frame = SockFrame::instance();
-    psvr = new GenSvr(rd_thresh, wr_thresh);
+    psvr = new GenSvr(conf);
 
     do { 
-        frame->setTimeout(rd_timeout, wr_timeout);
-        frame->creatSvr(ip, port, psvr, 0);
-
-        frame->start();
-        frame->wait();
+        ret = psvr->init();
+        if (0 != ret) {
+            break;
+        }
+        
+        psvr->start();
+        psvr->wait();
     } while (0);
 
     delete psvr;
-    SockFrame::destroy(frame);
 
     LOG_INFO("ret=%d| end test svr|", ret);
     
     return ret;
 }
 
-int testCli(const char ip[], int port,
-    int cliCnt, int pkgSize, int pkgCnt) {
+int testCli(Config* conf) {
     int ret = 0;
-    SockFrame* frame = NULL;
     GenCli* pcli = NULL;
 
     LOG_INFO("test poll|");
 
-    frame = SockFrame::instance();
-    pcli = new GenCli(0, 0, pkgSize, pkgCnt);
+    pcli = new GenCli(conf);
 
-    do { 
-        frame->setTimeout(60, 60);
-
-        for (int i=0; i<cliCnt; ++i) {
-            frame->sheduleCli(1, ip, port, pcli, pcli->genExtra());
+    do {
+        ret = pcli->init();
+        if (0 != ret) {
+            break;
         }
         
-        frame->start();
-        frame->wait();
+        pcli->start();
+        pcli->wait();
     } while (0);
 
     delete pcli;
-    SockFrame::destroy(frame);
 
     LOG_INFO("ret=%d| end test cli|", ret);
     
@@ -62,67 +56,44 @@ int testCli(const char ip[], int port,
 }
 
 void usage(const char* prog) {
-    LOG_ERROR("usage: %s <isSvr> <ip> <port>, examples:\n"
-        "server: %s 1 <ip> <port> [rd_thresh] [wr_thresh], or\n"
-        "client: %s 0 <ip> <port> <cli_cnt> <pkg_len> <init_pkg_cnt>\n", 
-        prog, prog, prog);
+    fprintf(stderr, "usage: %s [conf_file],\n"
+        "example: %s service.conf\n", 
+        prog, prog);
 }
 
 int testPoll(int argc, char* argv[]) {
-    const char* ip = NULL;
-    int port = 0;
     int opt = 0;
-    int cliCnt = 0;
-    int pkgSize = 0;
-    int pkgCnt = 0;
-    unsigned rd_thresh = 0;
-    unsigned wr_thresh = 0;
-    unsigned rd_timeout = 0;
-    unsigned wr_timeout = 0;
+    int ret = 0;
+    const char* path = NULL;
+    Config* conf = NULL;
 
-    if (2 <= argc) {
-        opt = atoi(argv[1]);
-        armSigs();
+    conf = new Config;
+
+    if (1 == argc) {
+        path = NULL;
+    } else if (2 == argc) {
+        path = argv[1];
     } else {
         usage(argv[0]);
         return -1;
     }
 
-    if (1 == opt) { 
-        if (4 <= argc) {
-            ip = argv[2];
-            port = atoi(argv[3]);
-
-            if (6 <= argc) {
-                rd_thresh = atoi(argv[4]);
-                wr_thresh = atoi(argv[5]); 
-
-                if (8 <= argc) {
-                    rd_timeout = atoi(argv[6]);
-                    wr_timeout = atoi(argv[7]);
-                }
-            }
-            
-            testSrv(ip, port, rd_thresh, wr_thresh,
-                rd_timeout, wr_timeout);
-        } else {
-            usage(argv[0]);
-        }
-    } else if (0 == opt) { 
-        if (7 == argc) {
-            ip = argv[2];
-            port = atoi(argv[3]);
-            cliCnt = atoi(argv[4]);
-            pkgSize = atoi(argv[5]);
-            pkgCnt = atoi(argv[6]);
-            
-            testCli(ip, port, cliCnt, pkgSize, pkgCnt);
-        } else {
-            usage(argv[0]);
-        }
-    } else {
-        usage(argv[0]);
-    }
+    armSigs();
     
-    return 0;
+    ret = conf->parseFile(path);
+    if (0 != ret) {
+        return ret;
+    }
+
+    ret = conf->getNum(GLOBAL_SEC, "role", opt);
+    if (0 != ret) return ret;
+
+    if (0 == opt) {
+        ret = testCli(conf);
+    } else {
+        ret = testSrv(conf);
+    }
+
+    return ret;
 }
+

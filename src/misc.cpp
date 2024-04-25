@@ -14,14 +14,45 @@
 #include<arpa/inet.h> 
 #include<unistd.h>
 #include<errno.h>
-#include<fcntl.h> 
+#include<fcntl.h>
+#include<sys/stat.h>
+#include<sys/random.h>
 #include"misc.h"
-#include"msgtool.h"
+#include"clog.h"
 
 
 #define __INIT_RUN__ __attribute__((unused, constructor))
+#define __END_RUN__ __attribute__((unused, destructor))
 
-static ClockTime g_origin_tm = INIT_CLOCK_TIME;
+struct _Global {
+    ClockTime m_origin_tm;
+    int m_pid;
+    int m_dev_fd; 
+};
+
+static _Global g_global = {
+    INIT_CLOCK_TIME,
+    0,
+    0,
+};
+
+static int _getDevHd() {
+    int fd = -1;
+    
+    fd = open("/dev/urandom", O_RDONLY);
+    if (0 < fd) { 
+        MiscTool::setNonBlock(fd);
+        return fd;
+    } else {
+        fd = open("/dev/random", O_RDONLY|O_NONBLOCK);
+        if (0 < fd) {
+            MiscTool::setNonBlock(fd);
+            return fd;
+        } else {
+            return 0;
+        }
+    }
+} 
 
 static void _getTime(ClockTime* ct) {
     int ret = 0;
@@ -37,135 +68,40 @@ static void _getTime(ClockTime* ct) {
     }
 }
 
-static __INIT_RUN__ void initTool() {
+static void _initTime() {
     ClockTime ct1;
 
+    _getTime(&g_global.m_origin_tm);
     MiscTool::getClock(&ct1);
-    _getTime(&g_origin_tm);
 
-    if (g_origin_tm.m_msec >= ct1.m_msec) {
-        g_origin_tm.m_sec -= ct1.m_sec;
-        g_origin_tm.m_msec -= ct1.m_msec;
+    if (g_global.m_origin_tm.m_msec >= ct1.m_msec) {
+        g_global.m_origin_tm.m_msec -= ct1.m_msec;
+        g_global.m_origin_tm.m_sec -= ct1.m_sec;
     } else {
-        g_origin_tm.m_sec -= ct1.m_sec + 1;
-        g_origin_tm.m_msec += 1000 - ct1.m_msec;
-    } 
+        g_global.m_origin_tm.m_msec += 1000 - ct1.m_msec;
+        g_global.m_origin_tm.m_sec -= ct1.m_sec + 1;
+    }
 } 
 
-static int timeStamp(char stamp[], int max) {
-    int cnt = 0;
-    ClockTime ct1;
-    time_t in;
-    struct tm out;
+static __INIT_RUN__ void initLib() {
+    _initTime();
 
-    MsgTool::getTime(&ct1);
+    g_global.m_dev_fd = _getDevHd();
+    srand(MiscTool::getTimeSec());
+} 
 
-    in = ct1.m_sec;
-    memset(&out, 0, sizeof(out));
-    localtime_r(&in, &out);
-    cnt = snprintf(stamp, max, "<%d-%02d-%02d %02d:%02d:%02d.%u %d> ",
-        out.tm_year + 1900, out.tm_mon + 1,
-        out.tm_mday, out.tm_hour,
-        out.tm_min, out.tm_sec,
-        ct1.m_msec,
-        MsgTool::getTid());
-    if (0 < max && 0 < cnt) {
-        if (cnt < max) {
-            return cnt;
-        } else {
-            stamp[--max] = '\0';
-            return max;
-        }
-    } else {
-        stamp[0] = '\0';
-        return 0;
-    }
-}
-
-void log_screen(const char format[], ...) {
-    int max = 0;
-    int cnt = 0;
-    char buf[1024];
-    char* psz = NULL;
-    va_list ap;
-
-    max = (int)sizeof(buf) - 1;
-    buf[max] = '\0';
-    psz = buf;
-    
-    cnt = timeStamp(psz, max);
-    psz += cnt;
-    max -= cnt;
-    
-    va_start(ap, format);
-    cnt = vsnprintf(psz, max, format, ap);
-    va_end(ap);
-
-    fprintf(stderr, "%s\n", buf);
-}
-
-void MsgTool::getTime(ClockTime* ct) {
-    MiscTool::getClock(ct);
-
-    MiscTool::clock2Time(ct, ct);
-}
-
-void MsgTool::pause() {
-    ::pause();
-}
-
-int MsgTool::getTid() {
-    int id = 0;
-
-    id = syscall(SYS_gettid);
-    return id;
-}
-
-int MsgTool::getPid() {
-    int id = 0;
-
-    id = (int)getpid();
-    return id;
-}
-
-void MsgTool::armSig(int sig, PFunSig fn) {
-    struct sigaction act;
-
-    memset(&act, 0, sizeof(act));
-    sigemptyset(&act.sa_mask);
-
-    act.sa_flags = SA_RESTART;
-
-    if (NULL != fn) {
-        act.sa_handler = fn;
-    } else {
-        act.sa_handler = SIG_DFL;
-    }
-  
-    sigaction(sig, &act, NULL);
-}
-
-void MsgTool::raise(int sig) {
-    ::raise(sig);
-}
-
-bool MsgTool::isCoreSig(int sig) {
-    static const int g_core_signals[] = {
-        SIGQUIT, SIGILL, SIGABRT, SIGFPE, 
-        SIGSEGV, SIGBUS, SIGSYS
-    };
-
-    for (int i=0; i<ARR_CNT(g_core_signals); ++i) {
-        if (g_core_signals[i] == sig) {
-            return true;
-        }
+static void __END_RUN__ finishLib() {
+    if (0 < g_global.m_dev_fd) {
+        close(g_global.m_dev_fd);
+        g_global.m_dev_fd = 0;
     }
 
-    return false;
+    g_global.m_pid = 0;
 }
 
-int MsgTool::maxSig() {
-    return SIGRTMIN;
+void MiscTool::getTime(ClockTime* ct) {
+    getClock(ct); 
+    clock2Time(ct, ct);
 }
 
 void MiscTool::getClock(ClockTime* ct) {
@@ -183,8 +119,8 @@ void MiscTool::getClock(ClockTime* ct) {
 }
 
 void MiscTool::clock2Time(ClockTime* tm, const ClockTime* clk) {
-    tm->m_sec = clk->m_sec + g_origin_tm.m_sec;
-    tm->m_msec = clk->m_msec + g_origin_tm.m_msec;
+    tm->m_sec = clk->m_sec + g_global.m_origin_tm.m_sec;
+    tm->m_msec = clk->m_msec + g_global.m_origin_tm.m_msec;
     if (1000 <= tm->m_msec) {
         tm->m_msec -= 1000;
         ++tm->m_sec;
@@ -197,6 +133,106 @@ long MiscTool::diffMsec(const ClockTime* ct1,
     long t2 = ct2->m_sec * 1000 + ct2->m_msec;
 
     return t1 - t2;
+}
+
+void MiscTool::getTimeMs(unsigned long* pn) { 
+    ClockTime ct = {0, 0};
+    
+    getTime(&ct);
+
+    *pn = ct.m_sec;
+    *pn = *pn * 1000 + ct.m_msec;
+}
+
+unsigned MiscTool::getTimeSec() {
+    ClockTime ct = {0, 0};
+    
+    getTime(&ct);
+
+    return ct.m_sec;
+}
+
+void MiscTool::setNonBlock(int fd) {
+    fcntl(fd, F_SETFL, O_NONBLOCK);
+}
+
+void MiscTool::pause() {
+    ::pause();
+}
+
+int MiscTool::getTid() {
+    int id = 0;
+
+    id = syscall(SYS_gettid);
+    return id;
+}
+
+int MiscTool::getPid() {
+    int id = 0;
+
+    id = (int)getpid();
+    
+    return id;
+}
+
+int MiscTool::getFastPid() {
+    if (0 != g_global.m_pid) {
+        return g_global.m_pid;
+    } else {
+        g_global.m_pid = getPid();
+        return g_global.m_pid;
+    } 
+}
+
+int MiscTool::mkDir(const char dir[]) {
+    int ret = 0;
+
+    ret = mkdir(dir, 0755);
+    if (0 == ret || EEXIST == errno) {
+        return 0;
+    } else {
+        return -1;
+    }
+}
+
+void MiscTool::armSig(int sig, PFunSig fn) {
+    struct sigaction act;
+
+    memset(&act, 0, sizeof(act));
+    sigemptyset(&act.sa_mask);
+
+    act.sa_flags = SA_RESTART;
+
+    if (NULL != fn) {
+        act.sa_handler = fn;
+    } else {
+        act.sa_handler = SIG_DFL;
+    }
+  
+    sigaction(sig, &act, NULL);
+}
+
+void MiscTool::raise(int sig) {
+    ::raise(sig);
+}
+
+bool MiscTool::isCoreSig(int sig) {
+    static const int g_core_signals[] = {
+        SIGQUIT, SIGILL, SIGABRT, SIGFPE, 
+        SIGSEGV, SIGBUS, SIGSYS
+    };
+
+    for (int i=0; i<ARR_CNT(g_core_signals); ++i) {
+        if (g_core_signals[i] == sig) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+int MiscTool::maxSig() {
+    return SIGRTMIN;
 }
 
 unsigned long long MiscTool::read8Bytes(int fd) {
@@ -305,264 +341,12 @@ int MiscTool::creatPipes(int (*pfds)[2]) {
     return ret;
 }
 
-
-
-int SockTool::creatSock() {
-    int fd = -1;
-
-    fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (0 < fd) {
-        fcntl(fd, F_SETFL, O_NONBLOCK);
-    }
-    
-    return fd;
-}
-
-bool SockTool::chkConnectStat(int fd) {
-    int ret = 0;
-    int errcode = 0;
-	socklen_t socklen = 0;
-
-    socklen = sizeof(errcode);
-    ret = getsockopt(fd, SOL_SOCKET, SO_ERROR, &errcode, &socklen);
-    if (0 == ret && 0 == errcode) {
-        return true;
-    } else {
-        return false;
-    } 
-}
-
-int SockTool::setReuse(int fd) {
-    int ret = 0;
-    int val = 1;
-	int len = sizeof(val);
-    
-    ret = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, len); 
-    return ret;
-}
-
-int SockTool::creatListener(const char szIP[], int port, int backlog) {
-    int ret = 0;
-    int fd = -1;
-    SockParam param;
-
-    param.m_port = port;
-    strncpy(param.m_ip, szIP, sizeof(param.m_ip) - 1);
-
-    ret = ip2Addr(&param);
-    if (0 != ret) {
-        return -1;
-    }
-    
-    fd = creatSock();
-    if (0 < fd) {
-        setReuse(fd);
-        ret = bind(fd, (struct sockaddr*)param.m_addr, param.m_addrLen);
-        if (0 != ret) {
-            closeSock(fd);
-            
-            LOG_ERROR("bind error:%s", strerror(errno));
-            return -1;
-        }
-        
-        ret = listen(fd, backlog);
-        if (0 != ret) {
-            closeSock(fd);
-            
-            LOG_ERROR("listen error");
-            return -1;
-        }
-
-        return fd;
-    } else {
-        return -1;
-    }
-}
-
-int SockTool::creatConnector(const char szIP[], int port) {
-    int ret = 0;
-    int fd = -1;
-    SockParam param;
-
-    param.m_port = port;
-    strncpy(param.m_ip, szIP, sizeof(param.m_ip) - 1);
-
-    ret = ip2Addr(&param);
-    if (0 != ret) {
-        return -1;
-    }
-    
-    fd = creatSock();
-    if (0 < fd) {
-        ret = connect(fd, (struct sockaddr*)param.m_addr, param.m_addrLen);
-        if (0 == ret || EINPROGRESS == errno) {
-            return fd;
+void MiscTool::getRand(void* buf, int len) {
+    if (0 < len) {
+        if (0 < g_global.m_dev_fd) {
+            read(g_global.m_dev_fd, buf, len);
         } else {
-            closeSock(fd);
-            
-            LOG_ERROR("connect error");
-            return -1;
-        }
-    } else { 
-        return -1;
+            getrandom(buf, len, GRND_NONBLOCK);
+        } 
     }
-}
-
-int SockTool::acceptSock(int listenFd, 
-    int* pfd, SockParam* param) {
-    int newFd = -1;
-    socklen_t addrLen = 0;
-    struct sockaddr_in addr;
-
-    addrLen = sizeof(addr);
-    memset(&addr, 0, addrLen);
-    memset(param, 0, sizeof(SockParam));
-    
-    newFd = accept(listenFd, (struct sockaddr*)&addr, &addrLen);
-    if (0 < newFd) {
-        fcntl(newFd, F_SETFL, O_NONBLOCK);
-        
-        param->m_addrLen = (int)addrLen;
-        memcpy(param->m_addr, &addr, param->m_addrLen);
-        
-        addr2IP(param); 
-        LOG_INFO("accept| newfd=%d| addr_len=%d| peer=%s:%d|", 
-            newFd, (int)addrLen, param->m_ip, param->m_port);
-        
-        *pfd = newFd;
-        return 1;
-    } else if (EINTR == errno || EAGAIN == errno) {
-        *pfd = -1;
-        return 0;
-    } else {
-        *pfd = -1;
-        return -1;
-    } 
-}
-
-void SockTool::closeSock(int fd) {
-    if (0 < fd) {
-        close(fd);
-    }
-}
-
-int SockTool::chkAddr(const char szIP[], int port) {
-    int ret = 0;
-    char buf[256] = {0};
-    
-    if (0 < port && port < 0xFFFF) {
-        ret = inet_pton(AF_INET, szIP, buf);
-        if (1 == ret) {
-            return 0;
-        } else if (0 == ret) {
-            LOG_ERROR("chk_addr| ip=%s:%d| err=invalid ip|",
-                szIP, port);
-            return -3;
-        } else {
-            LOG_ERROR("chk_addr| ip=%s:%d| err=invalid format|",
-                szIP, port);
-            return -2;
-        }
-    } else {
-        LOG_ERROR("chk_addr| ip=%s:%d| err=invalid port|",
-            szIP, port);
-        return -1;
-    }
-}
-
-int SockTool::ip2Addr(SockParam* param) {
-    int ret = 0;
-    struct sockaddr_in* addr = (struct sockaddr_in*)param->m_addr;
-
-    param->m_addrLen = 0;
-    memset(param->m_addr, 0, sizeof(param->m_addr));
-
-    addr->sin_family = AF_INET;
-    addr->sin_port = htons(param->m_port);
-    ret = inet_pton(AF_INET, param->m_ip, &addr->sin_addr);
-    if (1 == ret) {
-        param->m_addrLen = sizeof(struct sockaddr_in);
-
-        return 0;
-    } else if (0 == ret) {
-        LOG_ERROR("ip_to_addr| ip=%s| err=invalid ip|",
-            param->m_ip);
-        return -1;
-    } else {
-        LOG_ERROR("ip_to_addr| ip=%s| err=%s|",
-            param->m_ip, strerror(errno));
-        return -1;
-    }
-}
-
-int SockTool::addr2IP(SockParam* param) {
-    const char* psz = NULL;
-    struct sockaddr_in* addr = (struct sockaddr_in*)param->m_addr;
-
-    param->m_port = ntohs(addr->sin_port);
-    memset(param->m_ip, 0, sizeof(param->m_ip));
-    psz = inet_ntop(AF_INET, &addr->sin_addr, param->m_ip, sizeof(param->m_ip));
-    if (NULL != psz) {
-        return 0;
-    } else {
-        LOG_ERROR("addr_to_ip| addr_len=%d| err=%s|",
-            param->m_addrLen, strerror(errno));
-        return -1;
-    }
-}
-
-int SockTool::recvTcp(int fd, void* buf, int max) {
-    int ret = 0;
-    int size = 0;
-
-    if (0 < max) {
-        size = recv(fd, buf, max, 0);
-        if (0 < size) {
-            LOG_DEBUG("recvTcp| fd=%d| maxlen=%d| rdlen=%d| msg=ok|",
-                fd, max, size); 
-            ret = size;
-        } else if (0 == size) {
-            LOG_DEBUG("recvTcp| fd=%d| maxlen=%d| msg=peer closed|",
-                fd, max);
-            
-            ret = -2;
-        } else if (EAGAIN == errno) {
-            LOG_DEBUG("recvTcp| fd=%d| maxlen=%d| msg=read empty|",
-                fd, max);
-            
-            ret = 0;
-        } else {
-            LOG_DEBUG("recvTcp| fd=%d| maxlen=%d| msg=read error:%s|",
-                fd, max, strerror(errno));
-            ret = -1;
-        }
-    }
-
-    return ret;
-}
-
-int SockTool::sendTcp(int fd, const void* psz, int max) {
-    int ret = 0;
-    int cnt = 0;
-
-    if (0 < max) {
-        cnt = send(fd, psz, max, MSG_NOSIGNAL);
-        if (0 <= cnt) {
-            LOG_DEBUG("sendTcp| fd=%d| maxlen=%d| wrlen=%d| msg=ok|",
-                fd, max, cnt);
-            ret = cnt;
-        } else if (EAGAIN == errno) {
-            LOG_DEBUG("sendTcp| fd=%d| maxlen=%d| msg=write block|",
-                fd, max);
-            ret = 0;
-        } else {
-            LOG_DEBUG("sendTcp| fd=%d| maxlen=%d| msg=write error:%s|",
-                fd, max, strerror(errno));
-            ret = -1;
-        }
-    }
-
-    return ret;
-}
-
-
+} 

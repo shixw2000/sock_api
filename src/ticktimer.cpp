@@ -55,15 +55,23 @@ void TickTimer::tick() {
     if (!hlistEmpty(&m_tv1[slot1])) {
         hlistReplace(&list, &m_tv1[slot1]); 
 
-        doTimer(&list);
+        doTimers(&list);
     } 
 }
 
-void TickTimer::doTimer(HRoot* list) {
+void TickTimer::doTimer(TimerObj* ele) {
+    bool bOk = false;
+    
+    bOk = ele->func(ele->m_data, ele->m_data2, ele);
+    if (bOk && 0 < ele->m_interval) {
+        _schedule(ele, ele->m_interval);
+    }
+}
+
+void TickTimer::doTimers(HRoot* list) {
     TimerObj* ele = NULL;
     HList* first = NULL;
-    bool bDel = false;
-
+    
     /* just here, need do like this for the most safe rule */
     while (!hlistEmpty(list)) {
         first = hlistFirst(list);
@@ -71,13 +79,7 @@ void TickTimer::doTimer(HRoot* list) {
 
         ele = CONTAINER(first, TimerObj, m_node); 
         
-        bDel = ele->m_bDel;
-        ele->func(ele->m_data, ele->m_data2);
-        if (bDel) {
-            TickTimer::freeObj(ele);
-        } else if (0 < ele->m_interval) {
-            _schedule(ele, ele->m_interval);
-        }
+        doTimer(ele);
     } 
 }
 
@@ -136,10 +138,6 @@ void TickTimer::setTimerCb(TimerObj* ele,
     ele->func = func;
     ele->m_data = data;
     ele->m_data2 = data2;
-}
-
-void TickTimer::setTimerAutoDel(TimerObj* ele) {
-    ele->m_bDel = true;
 }
 
 TimerObj* TickTimer::allocObj() {

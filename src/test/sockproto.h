@@ -2,10 +2,13 @@
 #define __SOCKPROTO_H__
 #include"isockapi.h"
 #include"sockframe.h"
+#include"config.h"
 
 
 /* the min head size used by protocol user */
 static const int MAX_MSG_HEAD_SIZE = 32; 
+static const char SERVER_SEC[] = "server";
+static const char CLIENT_SEC[] = "client";
 
 struct SockBuffer {
     NodeMsg* m_msg; 
@@ -40,50 +43,57 @@ private:
 };
 
 
-class GenSvr : public ISockSvr {
-    class GenAccpt : public ISockComm {
-    public:
-        GenAccpt(SockFrame* frame);
-        ~GenAccpt();
-        
-        virtual void onClose(int hd);
-    
-        virtual int process(int hd, NodeMsg* msg);
-
-        virtual int parseData(int fd, const char* buf, int size);
-
-    private:
-        SockFrame* m_frame;
-        GenSockProto* m_proto;
-    };
-    
+class GenSvr : public ISockSvr { 
 public:
-    GenSvr(unsigned rd_thresh, 
-        unsigned wr_thresh);
+    GenSvr(Config* conf);
     
     virtual ~GenSvr();
+
+    int init();
+    void finish();
+
+    void start();
+    void stop();
+    void wait();
 
     virtual int onNewSock(int parentId, 
         int newId, AccptOption& opt);
 
+    virtual void onListenerClose(int hd); 
     virtual void onClose(int hd);
+
+    virtual int process(int hd, NodeMsg* msg);
+
+    virtual int parseData(int fd, const char* buf, int size);
 
     static SockBuffer* allocBuffer();
     static void freeBuffer(SockBuffer*);
 
 private:
     SockFrame* m_frame;
-    GenAccpt* m_accpt;
+    GenSockProto* m_proto;
+    Config* m_conf;
     unsigned m_rd_thresh; 
     unsigned m_wr_thresh;
+    unsigned m_rd_timeout;
+    unsigned m_wr_timeout;
+    int m_log_level;
+    int m_log_stdin;
+    int m_log_size;
+    AddrInfo m_addr;
 };
 
 class GenCli : public ISockCli {
 public:
-    GenCli(unsigned rd_thresh, 
-        unsigned wr_thresh,
-        int pkgSize, int pkgCnt);
+    GenCli(Config* conf);
     virtual ~GenCli();
+
+    int init();
+    void finish();
+
+    void start();
+    void stop();
+    void wait();
 
     long genExtra();
 
@@ -103,10 +113,18 @@ public:
 private: 
     SockFrame* m_frame;
     GenSockProto* m_proto;
+    Config* m_conf;
     unsigned m_rd_thresh; 
     unsigned m_wr_thresh;
+    unsigned m_rd_timeout;
+    unsigned m_wr_timeout;
     int m_pkg_size;
     int m_pkg_cnt;
+    int m_cli_cnt;
+    int m_log_level;
+    int m_log_stdin;
+    int m_log_size;
+    AddrInfo m_addr;
 };
 
 

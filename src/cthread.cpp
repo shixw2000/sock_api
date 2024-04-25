@@ -4,7 +4,7 @@
 #include<cstring>
 #include"shareheader.h"
 #include"cthread.h"
-#include"msgtool.h"
+#include"misc.h"
 
 
 CThread::CThread() {
@@ -63,13 +63,13 @@ void* CThread::_activate(void* arg) {
 
 void CThread::proc() { 
     LOG_INFO("start to run| name=%s| tid=%d| id=0x%x|", 
-        m_name, MsgTool::getTid(), m_thrId);
+        m_name, MiscTool::getTid(), m_thrId);
 
     m_isRun = true;
     run(); 
     m_isRun = false;
     
     LOG_INFO("end to run| name=%s| tid=%d| id=0x%lx|", 
-        m_name, MsgTool::getTid(), m_thrId);
+        m_name, MiscTool::getTid(), m_thrId);
 }
 

@@ -7,10 +7,7 @@ class Lock;
 class TickTimer;
 class ISockBase;
 
-class ManageCenter {
-    static const int MAX_BUFF_SIZE = 1024 * 1024;
-    static const int MAX_FD_NUM = 600; 
-    
+class ManageCenter { 
 public:
     ManageCenter();
     ~ManageCenter();
@@ -21,6 +18,9 @@ public:
     int capacity() const {
         return m_cap;
     }
+
+    TimerObj* allocTimer();
+    void freeTimer(TimerObj*);
 
     bool chkExpire(EnumDir enDir, const GenData* data, unsigned now); 
     bool updateExpire(EnumDir enDir, GenData* data, unsigned now);
@@ -73,6 +73,7 @@ public:
     
     bool isClosed(GenData* data) const;
     bool markClosed(GenData* data);
+    bool markClosed(int fd);
 
     void setData(GenData* data, ISockBase* sock, long extra);
     GenData* reg(int fd);
@@ -80,7 +81,8 @@ public:
 
     NodeCmd* creatCmdComm(EnumSockCmd cmd, int fd); 
     NodeCmd* creatCmdSchedTask(unsigned delay,
-        TFunc func, long data, long data2);
+        unsigned interval, TimerFunc func,
+        long data, long data2);
 
     int writeMsg(int fd, NodeMsg* pMsg, int max);
     int recvMsg(GenData* data, int max);
@@ -101,7 +103,7 @@ public:
     void setFlowctl(EnumDir enDir, GenData* data, TFunc func, long ptr);
 
     int onNewSock(GenData* parentData,
-        int newFd, AccptOption& opt);
+        GenData* childData, AccptOption& opt);
     int onConnect(GenData* data, ConnOption& opt);
     int onProcess(GenData* data, NodeMsg* pMsg);
     void onClose(GenData* data);
@@ -124,9 +126,12 @@ private:
     
 private:
     const int m_cap;
+    const int m_timer_cap;
     Lock* m_lock; 
+    TimerObj* m_timer_objs;
     GenData* m_cache;
     GenData** m_datas;
+    Queue m_timer_pool;
     Queue m_pool;
     unsigned m_conn_timeout;
     unsigned m_rd_timeout;

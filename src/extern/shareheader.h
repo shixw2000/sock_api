@@ -1,5 +1,6 @@
 #ifndef __SHAREHEADER_H__
 #define __SHAREHEADER_H__
+#include"clog.h"
 
 
 #ifndef NULL
@@ -21,23 +22,11 @@
 
 #define ARR_CNT(x) (int)(sizeof(x)/sizeof((x)[0]))
 
-extern void log_screen(const char format[], ...);
-
-#if 0
-#define LOG_DEBUG(format, ...) log_screen(format, ##__VA_ARGS__)
-#else
-#define LOG_DEBUG(format, ...)
-#endif
-
-#define LOG_INFO log_screen
-#define LOG_ERROR log_screen
-
-static const int DEF_IP_SIZE = 32;
-static const int MAX_ADDR_SIZE = 256; 
 static const unsigned DEF_MSG_VER = 0x0814;
 static const unsigned DEF_TIMEOUT_SEC = 60;
 static const unsigned KILO = 1024;
 
+static const char DEF_BUILD_VER[] = __BUILD_VER__;
 
 #endif
 

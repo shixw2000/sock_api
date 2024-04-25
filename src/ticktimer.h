@@ -16,12 +16,10 @@ public:
     
     static TimerObj* allocObj();
     static void freeObj(TimerObj* obj); 
-    static void initObj(TimerObj* ele);
+    static void initObj(TimerObj* ele); 
     
     static void setTimerCb(TimerObj* ele, 
         TFunc cb, long data, long data2 = 0);
-    
-    static void setTimerAutoDel(TimerObj* ele);
 
     void schedule(TimerObj* ele, unsigned delay = 0,
         unsigned interval = 0);
@@ -30,7 +28,7 @@ public:
     
     unsigned now() const {
         return m_now;
-    }
+    } 
 
 private:    
     void tick();
@@ -38,7 +36,9 @@ private:
     
     void cascade(HRoot tv[], int index, int level);
     
-    void doTimer(HRoot* list);
+    void doTimers(HRoot* list);
+
+    void doTimer(TimerObj* ele); 
 
     inline int index(unsigned time, int level) {
         return (time >> (DEF_TV_BITS * level)) & DEF_TV_MASK;

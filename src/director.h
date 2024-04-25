@@ -31,7 +31,8 @@ public:
     int creatCli(const char szIP[], int port,
         ISockCli* base, long data2);
 
-    int schedule(unsigned delay, TFunc func, long data, long data2);
+    int schedule(unsigned delay, unsigned interval,
+        TimerFunc func, long data, long data2);
     
     int sendCommCmd(EnumDir enDir, EnumSockCmd cmd, int fd); 
     int sendCmd(EnumDir enDir, NodeCmd* pCmd);

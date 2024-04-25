@@ -2,15 +2,7 @@
 #define __MSGTOOL_H__
 
 
-typedef void (*PFunSig)(int);
 struct NodeMsg;
-
-struct ClockTime {
-    unsigned m_sec;
-    unsigned m_msec;
-};
-
-#define INIT_CLOCK_TIME {0,0}
 
 class MsgTool {
 public: 
@@ -45,20 +37,11 @@ public:
     static char* getMsg(NodeMsg* pb); 
     static NodeMsg* refNodeMsg(NodeMsg* pb);
 
+    static void setMsgSize(NodeMsg* pb, int size);
     static int getMsgSize(const NodeMsg* pb); 
     static int getMsgPos(const NodeMsg* pb);
     static void setMsgPos(NodeMsg* pb, int pos);
     static void skipMsgPos(NodeMsg* pb, int pos); 
-
-    static void getTime(ClockTime* ct);
-    static void pause();
-    static int getTid();
-    static int getPid();
-
-    static void armSig(int sig, PFunSig fn);
-    static void raise(int sig);
-    static bool isCoreSig(int sig);
-    static int maxSig();
 
 private:
     static char* _getPreHead(int preLen, NodeMsg* pb);

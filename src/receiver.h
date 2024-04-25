@@ -75,7 +75,7 @@ private:
 
     void cbTimer1Sec();
     void startTimer1Sec();
-    static void recvSecCb(long data1, long);
+    static bool recvSecCb(long data1, long, TimerObj*);
 
 private:
     static PRdFunc m_func[ENUM_RD_END];

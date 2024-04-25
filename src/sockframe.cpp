@@ -1,6 +1,6 @@
 #include"sockframe.h"
 #include"director.h"
-#include"msgtool.h"
+#include"misc.h"
 
 
 struct SockFrame::_intern {
@@ -8,6 +8,7 @@ struct SockFrame::_intern {
 };
 
 SockFrame::SockFrame() {
+    m_bValid = false;
     m_intern = NULL;
 }
 
@@ -17,38 +18,23 @@ SockFrame::~SockFrame() {
 static SockFrame* g_frame = NULL;
 
 SockFrame* SockFrame::instance() { 
-    int ret = 0;
-    SockFrame* frame = NULL;
+    return g_frame;
+}
 
-    if (NULL != g_frame) {
-        return g_frame;
-    } else {
-        frame = new SockFrame();
-        if (NULL != frame) {
-            ret = frame->init();
-            if (0 == ret) {
-                g_frame = frame;
+void SockFrame::creat() {
+    if (NULL == g_frame) {
+        g_frame = new SockFrame();
 
-                return g_frame;
-            } else {
-                frame->finish();
-                delete frame;
-                return NULL;
-            }
-        } else {
-            return NULL;
-        }
+        g_frame->init();
     }
 }
 
 void SockFrame::destroy(SockFrame* frame) {
-    if (NULL != frame) {
+    if (NULL != frame && frame == g_frame) {
+        g_frame = NULL;
+        
         frame->finish();
-        delete frame;
-
-        if (g_frame == frame) {
-            g_frame = NULL;
-        }
+        delete frame; 
     }
 }
 
@@ -64,6 +50,7 @@ int SockFrame::init() {
     ret = intern->director.init();
     if (0 == ret) {
         m_intern = intern;
+        m_bValid = true;
         return 0;
     } else {
         intern->director.finish();
@@ -74,105 +61,167 @@ int SockFrame::init() {
 
 void SockFrame::finish() {
     if (NULL != m_intern) {
+        m_bValid = false;
+        
         m_intern->director.finish();
         delete m_intern;
         m_intern = NULL;
     }
 }
 
+bool SockFrame::chkValid() const {
+    if (m_bValid) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
 void SockFrame::start() {
-    m_intern->director.start();
+    if (chkValid()) {
+        m_intern->director.start();
+    } else {
+        LOG_ERROR("start_frame| msg=invalid frame|");
+    }
 }
 
 void SockFrame::stop() {
-    m_intern->director.stop();
+    if (chkValid()) {
+        m_intern->director.stop();
+    } else {
+        LOG_ERROR("stop_frame| msg=invalid frame|");
+    }
 }
 
 void SockFrame::wait() {
-    m_intern->director.wait();
+    if (chkValid()) {
+        m_intern->director.wait();
+    } else {
+        LOG_ERROR("wait_frame| msg=invalid frame|");
+    }
 }
 
 void SockFrame::setTimeout(unsigned rd_timeout,
     unsigned wr_timeout) {
-    m_intern->director.setTimeout(rd_timeout,
-        wr_timeout);
+    if (chkValid()) {
+        m_intern->director.setTimeout(rd_timeout,
+            wr_timeout);
+    } 
 }
 
 long SockFrame::getExtra(int fd) {
-    return m_intern->director.getExtra(fd);
+    if (chkValid()) {
+        return m_intern->director.getExtra(fd);
+    } else {
+        return 0;
+    }
 }
 
 void SockFrame::getSpeed(int fd, unsigned& rd_thresh,
-        unsigned& wr_thresh) {
-    m_intern->director.getSpeed(fd, rd_thresh,
-        wr_thresh);
+    unsigned& wr_thresh) {
+    if (chkValid()) {
+        m_intern->director.getSpeed(fd, rd_thresh,
+            wr_thresh);
+    }
 }
 
 void SockFrame::setSpeed(int fd, unsigned rd_thresh, 
-        unsigned wr_thresh) {
-    m_intern->director.setSpeed(fd, rd_thresh,
-        wr_thresh);
+    unsigned wr_thresh) {
+    if (chkValid()) {
+        m_intern->director.setSpeed(fd, rd_thresh,
+            wr_thresh);
+    }
 } 
 
 int SockFrame::sendMsg(int fd, NodeMsg* pMsg) {
-    return m_intern->director.sendMsg(fd, pMsg);
+    if (chkValid()) {
+        return m_intern->director.sendMsg(fd, pMsg);
+    } else {
+        return -1;
+    }
 }
 
 int SockFrame::dispatch(int fd, NodeMsg* pMsg) {
-    return m_intern->director.dispatch(fd, pMsg);
+    if (chkValid()) {
+        return m_intern->director.dispatch(fd, pMsg);
+    } else {
+        return -1;
+    }
 }
 
 void SockFrame::closeData(int fd) {
-    m_intern->director.notifyClose(fd);
+    if (chkValid()) {
+        m_intern->director.notifyClose(fd);
+    }
 }
 
 void SockFrame::undelayRead(int fd) {
-    m_intern->director.undelayRead(fd);
+    if (chkValid()) {
+        m_intern->director.undelayRead(fd);
+    }
 }
 
 int SockFrame::creatSvr(const char szIP[], int port, 
     ISockSvr* svr, long data2) {
-    return m_intern->director.creatSvr(szIP, port,
-        svr, data2);
+    if (chkValid()) {
+        return m_intern->director.creatSvr(szIP, port,
+            svr, data2);
+    } else {
+        return -1;
+    }
 }
 
 int SockFrame::sheduleCli(unsigned delay, 
     const char szIP[], int port, 
     ISockCli* base, long data2) {
-    return m_intern->director.sheduleCli(delay, 
-        szIP, port, base, data2);
+    if (chkValid()) {
+        return m_intern->director.sheduleCli(delay, 
+            szIP, port, base, data2);
+    } else {
+        return -1;
+    }
 }
 
 int SockFrame::creatCli(const char szIP[],
     int port, ISockCli* base, long data2) {
-    return m_intern->director.creatCli(szIP,
-        port, base, data2);
+    if (chkValid()) {
+        return m_intern->director.creatCli(szIP,
+            port, base, data2);
+    } else {
+        return -1;
+    }
 }
 
-int SockFrame::schedule(unsigned delay, TFunc func,
+int SockFrame::schedule(unsigned delay, 
+    unsigned interval, TimerFunc func, 
     long data, long data2) {
-    return m_intern->director.schedule(delay, func, data, data2);
+    if (chkValid()) {
+        return m_intern->director.schedule(delay, 
+            interval, func, data, data2);
+    } else {
+        return -1;
+    }
 }
 
 static void sigHandler(int sig) {
     LOG_ERROR("*******sig=%d| msg=catch a signal|", sig);
 
-    for (int i=0; i<MsgTool::maxSig(); ++i) {
-        if (MsgTool::isCoreSig(sig)) {
-            MsgTool::armSig(sig, NULL);
-            MsgTool::raise(sig);
+    for (int i=0; i<MiscTool::maxSig(); ++i) {
+        if (MiscTool::isCoreSig(sig)) {
+            MiscTool::armSig(sig, NULL);
+            MiscTool::raise(sig);
             return;
         }
     }
 
-    if (NULL != g_frame) {
-        g_frame->stop();
+    if (NULL != SockFrame::instance()) {
+        SockFrame::instance()->stop();
     }
 }
 
 void armSigs() {
-    for (int i=1; i<MsgTool::maxSig(); ++i) {
-        MsgTool::armSig(i, &sigHandler);
+    for (int i=1; i<MiscTool::maxSig(); ++i) {
+        MiscTool::armSig(i, &sigHandler);
     }
 }
 

@@ -9,20 +9,23 @@
 #include"misc.h"
 #include"msgutil.h"
 #include"ticktimer.h"
+#include"socktool.h"
 
 
-static void readFlowctl(long arg, long arg2) {
+static bool readFlowctl(long arg, long arg2, TimerObj*) {
     Receiver* receiver = (Receiver*)arg;
     GenData* data = (GenData*)arg2;
     
     receiver->flowCtlCallback(data);
+    return false;
 }
 
-static void writeFlowctl(long arg, long arg2) {
+static bool writeFlowctl(long arg, long arg2, TimerObj*) {
     Sender* sender = (Sender*)arg;
     GenData* data = (GenData*)arg2;
     
     sender->flowCtlCallback(data);
+    return false;
 }
 
 Director::Director() {
@@ -195,14 +198,25 @@ int Director::sendCommCmd(EnumDir enDir,
 }
 
 void Director::notifyClose(GenData* data) {
+    bool close = false;
     int fd = m_center->getFd(data);
 
-    sendCommCmd(ENUM_DIR_DEALER, ENUM_CMD_CLOSE_FD, fd); 
+    close = m_center->markClosed(data); 
+    if (close) {
+        sendCommCmd(ENUM_DIR_RECVER, ENUM_CMD_REMOVE_FD, fd);
+        
+        LOG_INFO("cmd_close_fd| fd=%d| msg=closing|", fd);
+    }
 }
 
 void Director::notifyClose(int fd) {
-    if (m_center->exists(fd)) {
-        sendCommCmd(ENUM_DIR_DEALER, ENUM_CMD_CLOSE_FD, fd);
+    bool close = false;
+    
+    close = m_center->markClosed(fd); 
+    if (close) {
+        sendCommCmd(ENUM_DIR_RECVER, ENUM_CMD_REMOVE_FD, fd);
+        
+        LOG_INFO("cmd_close_fd| fd=%d| msg=closing|", fd);
     }
 }
 
@@ -316,13 +330,16 @@ void Director::closeData(GenData* data) {
     SockTool::closeSock(fd);
 }
 
-int Director::schedule(unsigned delay, TFunc func, 
-        long data, long data2) {
+int Director::schedule(unsigned delay, unsigned interval,
+    TimerFunc func, long data, long data2) {
     int ret = 0;
     NodeCmd* pCmd = NULL; 
     
+    /* convert from sec to ticks*/
+    delay *= DEF_NUM_PER_SEC;
+    interval *= DEF_NUM_PER_SEC;
     pCmd = m_center->creatCmdSchedTask(delay,
-        func, data, data2);
+        interval, func, data, data2);
     if (NULL != pCmd) {
         ret = sendCmd(ENUM_DIR_DEALER, pCmd);
     } else {
@@ -350,7 +367,7 @@ static void freeTask(TaskData* data) {
     free(data);
 }
 
-static void _creatCli(long arg, long arg2) {
+static bool _creatCli(long arg, long arg2) {
     Director* director = (Director*)arg;
     TaskData* task = (TaskData*)arg2;
     ISockCli* cli = dynamic_cast<ISockCli*>(task->m_base);
@@ -361,6 +378,7 @@ static void _creatCli(long arg, long arg2) {
     director->creatCli(ip, port, cli, data2);
 
     freeTask(task);
+    return false;
 }
 
 int Director::creatSvr(const char szIP[], int port, 
@@ -444,7 +462,7 @@ int Director::sheduleCli(unsigned delay,
     data->m_port = port;
     strncpy(data->m_szIP, szIP, sizeof(data->m_szIP) - 1);
 
-    ret = schedule(delay, &_creatCli, (long)this, (long)data);
+    ret = schedule(delay, 0, &_creatCli, (long)this, (long)data);
     return ret;
 }
 

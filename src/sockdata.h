@@ -15,6 +15,11 @@ static const int MASK_PER_SEC = 0x3;
 static const int DEF_FLOWCTL_TICK_NUM = 2;
 static const int DEF_POLL_TIME_MSEC = 1000;
 
+static const int MAX_BUFF_SIZE = 1024 * 1024;
+static const int MAX_FD_NUM = 10000;
+static const int DEF_CONN_TIMEOUT_TICK = 3 * DEF_NUM_PER_SEC;
+static const int DEF_RDWR_TIMEOUT_TICK = 60 * DEF_NUM_PER_SEC;
+
 enum EnumRdCb {
     ENUM_RD_DEFAULT = 0,
     ENUM_RD_SOCK,
@@ -70,7 +75,6 @@ enum EnumSockCmd {
     ENUM_CMD_ADD_FD,
     ENUM_CMD_REMOVE_FD,
     ENUM_CMD_DISABLE_FD,
-    ENUM_CMD_CLOSE_FD,
     ENUM_CMD_DELAY_FD,
     ENUM_CMD_UNDELAY_FD,
 
@@ -80,7 +84,9 @@ enum EnumSockCmd {
 };
 
 struct TimerObj;
-typedef void (*TFunc)(long, long);
+
+typedef bool (*TimerFunc)(long, long);
+typedef bool (*TFunc)(long, long, TimerObj*);
 
 struct TimerObj {
     HList m_node; 
@@ -89,7 +95,6 @@ struct TimerObj {
     long m_data2;
     unsigned m_expire;
     unsigned m_interval;
-    bool m_bDel;
 };
 
 struct CmdHead_t {
@@ -102,10 +107,11 @@ struct CmdComm {
 };
 
 struct CmdSchedTask {
-    TFunc func;
+    TimerFunc func;
     long m_data;
     long m_data2;
     unsigned m_delay; 
+    unsigned m_interval;
 };
 
 struct CmdSetFLowCtrl {

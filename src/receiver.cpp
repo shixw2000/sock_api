@@ -8,12 +8,14 @@
 #include"ticktimer.h"
 #include"lock.h"
 #include"misc.h"
+#include"socktool.h"
 
 
-void Receiver::recvSecCb(long data1, long) {
+bool Receiver::recvSecCb(long data1, long, TimerObj*) {
     Receiver* receiver = (Receiver*)data1;
 
     receiver->cbTimer1Sec();
+    return true;
 }
 
 Receiver::PRdFunc Receiver::m_func[ENUM_RD_END] = {
@@ -573,7 +575,7 @@ void Receiver::cmdUndelayFd(NodeCmd* base) {
     pCmd = MsgUtil::getCmdBody<CmdComm>(base);
     fd = pCmd->m_fd;
 
-    LOG_INFO("undelay_fd| fd=%d|", fd);
+    LOG_DEBUG("undelay_fd| fd=%d|", fd);
     
     if (exists(fd)) { 
         data = find(fd); 

@@ -1,35 +1,16 @@
-#ifndef __MISC_H__
-#define __MISC_H__
-#include"shareheader.h"
+#ifndef __SOCKTOOL_H__
+#define __SOCKTOOL_H__
 
+
+static const int DEF_IP_SIZE = 32;
+static const int MAX_ADDR_SIZE = 256; 
 
 struct SockParam {
     int m_port;
     int m_addrLen;
     char m_ip[DEF_IP_SIZE];
     char m_addr[MAX_ADDR_SIZE];
-}; 
-
-struct ClockTime;
-
-class MiscTool {
-public:
-    static void getClock(ClockTime* ct);
-    static void clock2Time(ClockTime* tm, 
-        const ClockTime* clk);
-    static long diffMsec(const ClockTime* ct1, 
-        const ClockTime* ct2);
-
-    static unsigned long long read8Bytes(int fd);
-    static void writeEvent(int fd);
-    static void writePipeEvent(int fd);
-    static void readPipeEvent(int fd);
-
-    static int creatEvent();
-    static int creatTimer(int ms);
-    static int creatPipes(int (*)[2]); 
 };
-
 
 class SockTool {
 public:
@@ -51,7 +32,6 @@ public:
 private:    
     static int creatSock();
 };
-
 
 #endif
 

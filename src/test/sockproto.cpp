@@ -158,19 +158,101 @@ int GenSockProto::parseBody(int fd,
     return used;
 }
 
-GenSvr::GenSvr(unsigned rd_thresh, 
-    unsigned wr_thresh) {
+GenSvr::GenSvr(Config* conf) : m_conf(conf) {
+    SockFrame::creat();
+    
     m_frame = SockFrame::instance();
-    m_accpt = new GenAccpt(m_frame);
+    m_proto = new GenSockProto(m_frame);
 
-    m_rd_thresh = rd_thresh;
-    m_wr_thresh = wr_thresh;
+    m_rd_thresh = 0;
+    m_wr_thresh = 0;
+    m_rd_timeout = 0;
+    m_wr_timeout = 0;
 }
 
 GenSvr::~GenSvr() {
-    if (NULL != m_accpt) {
-        delete m_accpt;
+    if (NULL != m_proto) {
+        delete m_proto;
     }
+
+    SockFrame::destroy(m_frame);
+}
+
+int GenSvr::init() {
+    int ret = 0;
+    int n = 0;
+    typeStr logDir;
+    typeStr sec;
+
+    ret = m_conf->getToken(GLOBAL_SEC, DEF_KEY_LOG_DIR, logDir);
+    if (0 == ret) { 
+        ret = ConfLog(logDir.c_str());
+    } else {
+        ret = ConfLog(NULL);
+    }
+    
+    CHK_RET(ret);
+
+    ret = m_conf->getNum(GLOBAL_SEC, DEF_KEY_LOG_LEVEL_NAME, n);
+    CHK_RET(ret); 
+    m_log_level = n;
+
+    SetLogLevel(m_log_level);
+
+    ret = m_conf->getNum(GLOBAL_SEC, DEF_KEY_LOG_STDIN_NAME, n);
+    CHK_RET(ret); 
+    m_log_stdin = n;
+
+    SetLogScreen(m_log_stdin);
+
+    ret = m_conf->getNum(GLOBAL_SEC, DEF_KEY_LOG_FILE_SIZE, n);
+    CHK_RET(ret); 
+    m_log_size = n;
+
+    SetMaxLogSize(m_log_size);
+
+    ret = m_conf->getNum(GLOBAL_SEC, "rd_thresh", n);
+    CHK_RET(ret); 
+    m_rd_thresh = n;
+
+    ret = m_conf->getNum(GLOBAL_SEC, "wr_thresh", n);
+    CHK_RET(ret); 
+    m_wr_thresh = n;
+
+    ret = m_conf->getNum(GLOBAL_SEC, "rd_timeout", n);
+    CHK_RET(ret); 
+    m_rd_timeout = n;
+
+    ret = m_conf->getNum(GLOBAL_SEC, "wr_timeout", n);
+    CHK_RET(ret); 
+    m_wr_timeout = n;
+
+    ret = m_conf->getToken(SERVER_SEC, "listen_addr", sec);
+    CHK_RET(ret); 
+
+    ret = m_conf->getAddr(m_addr, sec);
+    CHK_RET(ret);
+    
+    return ret;
+}
+
+void GenSvr::finish() {
+}
+
+void GenSvr::start() { 
+    m_frame->setTimeout(m_rd_timeout, m_wr_timeout);
+
+    m_frame->creatSvr(m_addr.m_ip.c_str(), m_addr.m_port, this, 0);
+    
+    m_frame->start();
+}
+
+void GenSvr::wait() {
+    m_frame->wait();
+}
+
+void GenSvr::stop() {
+    m_frame->stop();
 }
 
 SockBuffer* GenSvr::allocBuffer() {
@@ -194,7 +276,6 @@ int GenSvr::onNewSock(int, int,
     AccptOption& opt) {
     SockBuffer* buffer = allocBuffer();
 
-    opt.m_sock = m_accpt;
     opt.m_extra = (long)buffer;
     opt.m_rd_thresh = m_rd_thresh;
     opt.m_wr_thresh = m_wr_thresh;
@@ -202,27 +283,16 @@ int GenSvr::onNewSock(int, int,
     return 0;
 }
 
-void GenSvr::onClose(int) { 
+void GenSvr::onListenerClose(int) { 
 }
 
-GenSvr::GenAccpt::GenAccpt(SockFrame* frame) {
-    m_frame = frame;
-    m_proto = new GenSockProto(frame);
-}
-
-GenSvr::GenAccpt::~GenAccpt() {
-    if (NULL != m_proto) {
-        delete m_proto;
-    }
-}
-
-void GenSvr::GenAccpt::onClose(int hd) {
+void GenSvr::onClose(int hd) {
     SockBuffer* buffer = (SockBuffer*)m_frame->getExtra(hd);
 
     GenSvr::freeBuffer(buffer);
 }
 
-int GenSvr::GenAccpt::process(int hd, NodeMsg* msg) {
+int GenSvr::process(int hd, NodeMsg* msg) {
     MsgHead_t* head = NULL;
 
     head = (MsgHead_t*)MsgTool::getMsg(msg);
@@ -237,8 +307,7 @@ int GenSvr::GenAccpt::process(int hd, NodeMsg* msg) {
     return 0;
 }
 
-int GenSvr::GenAccpt::parseData(int fd, 
-    const char* buf, int size) {
+int GenSvr::parseData(int fd, const char* buf, int size) {
     SockBuffer* cache = (SockBuffer*)m_frame->getExtra(fd);
     int ret = 0;
     
@@ -247,22 +316,119 @@ int GenSvr::GenAccpt::parseData(int fd,
 }
 
 
-GenCli::GenCli(unsigned rd_thresh, 
-        unsigned wr_thresh,
-        int pkgSize, int pkgCnt) { 
+GenCli::GenCli(Config* conf) : m_conf(conf) {
+    SockFrame::creat();
+    
     m_frame = SockFrame::instance();
     m_proto = new GenSockProto(m_frame);
     
-    m_rd_thresh = rd_thresh;
-    m_wr_thresh = wr_thresh;
-    m_pkg_size = pkgSize;
-    m_pkg_cnt = pkgCnt;
+    m_rd_thresh = 0;
+    m_wr_thresh = 0;
+    m_rd_timeout = 0;
+    m_wr_timeout = 0;
+    m_pkg_size = 0;
+    m_pkg_cnt = 0;
+    m_cli_cnt = 1;
 }
 
 GenCli::~GenCli() {
     if (NULL != m_proto) {
         delete m_proto;
     }
+
+    SockFrame::destroy(m_frame);
+}
+
+int GenCli::init() {
+    int ret = 0;
+    int n = 0;
+    typeStr logDir;
+    typeStr sec;
+
+    ret = m_conf->getToken(GLOBAL_SEC, "log_dir", logDir);
+    if (0 == ret) { 
+        ret = ConfLog(logDir.c_str());
+    } else {
+        ret = ConfLog(NULL);
+    }
+    
+    CHK_RET(ret);
+    
+    ret = m_conf->getNum(GLOBAL_SEC, DEF_KEY_LOG_LEVEL_NAME, n);
+    CHK_RET(ret); 
+    m_log_level = n;
+
+    SetLogLevel(m_log_level);
+
+    ret = m_conf->getNum(GLOBAL_SEC, DEF_KEY_LOG_STDIN_NAME, n);
+    CHK_RET(ret); 
+    m_log_stdin = n;
+
+    SetLogScreen(m_log_stdin);
+
+    ret = m_conf->getNum(GLOBAL_SEC, DEF_KEY_LOG_FILE_SIZE, n);
+    CHK_RET(ret); 
+    m_log_size = n;
+
+    SetMaxLogSize(m_log_size);
+
+    ret = m_conf->getNum(GLOBAL_SEC, "rd_thresh", n);
+    CHK_RET(ret); 
+    m_rd_thresh = n;
+
+    ret = m_conf->getNum(GLOBAL_SEC, "wr_thresh", n);
+    CHK_RET(ret); 
+    m_wr_thresh = n;
+
+    ret = m_conf->getNum(GLOBAL_SEC, "rd_timeout", n);
+    CHK_RET(ret); 
+    m_rd_timeout = n;
+
+    ret = m_conf->getNum(GLOBAL_SEC, "wr_timeout", n);
+    CHK_RET(ret); 
+    m_wr_timeout = n;
+
+    ret = m_conf->getNum(CLIENT_SEC, "pkgSize", n);
+    CHK_RET(ret); 
+    m_pkg_size = n;
+
+    ret = m_conf->getNum(CLIENT_SEC, "pkgCnt", n);
+    CHK_RET(ret); 
+    m_pkg_cnt = n;
+
+    ret = m_conf->getNum(CLIENT_SEC, "cliCnt", n);
+    CHK_RET(ret); 
+    m_cli_cnt = n;
+
+    ret = m_conf->getToken(CLIENT_SEC, "conn_addr", sec);
+    CHK_RET(ret); 
+
+    ret = m_conf->getAddr(m_addr, sec);
+    CHK_RET(ret);
+    
+    return ret;
+}
+
+void GenCli::finish() {
+}
+
+void GenCli::start() {
+    m_frame->setTimeout(m_rd_timeout, m_wr_timeout);
+
+    for (int i=0; i<m_cli_cnt; ++i) {
+        m_frame->sheduleCli(1, m_addr.m_ip.c_str(), 
+            m_addr.m_port, this, genExtra());
+    }
+    
+    m_frame->start(); 
+}
+
+void GenCli::wait() {
+    m_frame->wait();
+}
+
+void GenCli::stop() {
+    m_frame->stop();
 }
 
 NodeMsg* GenCli::genMsg(int size) {

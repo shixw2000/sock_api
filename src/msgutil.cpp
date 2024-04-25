@@ -319,6 +319,10 @@ bool MsgTool::completedMsg(NodeMsg* pb) {
     return MsgUtil::completedMsg(pb);
 }
 
+void MsgTool::setMsgSize(NodeMsg* pb, int size) {
+    MsgUtil::setMsgSize(pb, size);
+}
+
 int MsgTool::getMsgSize(const NodeMsg* pb) {
     return MsgUtil::getMsgSize(pb);
 }

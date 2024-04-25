@@ -19,6 +19,8 @@ public:
     int init();
     void finish();
 
+    virtual void stop();
+
     GenData* find(int fd) const;
     bool exists(int fd) const;
     
@@ -53,7 +55,6 @@ private:
     void dealCmds(LList* list); 
     void procCmd(NodeCmd* base);
     void cmdRemoveFd(NodeCmd* base); 
-    void cmdCloseFd(NodeCmd* base);
     void cmdSchedTask(NodeCmd* base);
 
     void onAccept(GenData* listenData,
@@ -61,7 +62,7 @@ private:
 
     void cbTimer1Sec();
     void startTimer1Sec();
-    static void dealSecCb(long data1, long);
+    static bool dealSecCb(long data1, long, TimerObj*);
 
 private:
     static PDealFunc m_func[ENUM_DEAL_END];

@@ -8,12 +8,14 @@
 #include"managecenter.h"
 #include"ticktimer.h"
 #include"lock.h"
+#include"socktool.h"
 
 
-void Sender::sendSecCb(long data1, long) {
+bool Sender::sendSecCb(long data1, long, TimerObj*) {
     Sender* sender = (Sender*)data1;
 
     sender->cbTimer1Sec();
+    return true;
 }
 
 Sender::PWrFunc Sender::m_func[ENUM_WR_END] = {

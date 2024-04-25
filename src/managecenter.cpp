@@ -6,6 +6,7 @@
 #include"ticktimer.h"
 #include"misc.h"
 #include"isockapi.h"
+#include"socktool.h"
 
 
 struct GenData { 
@@ -58,15 +59,18 @@ struct GenData {
 };
 
 
-ManageCenter::ManageCenter() : m_cap(MAX_FD_NUM) {
+ManageCenter::ManageCenter() 
+    : m_cap(MAX_FD_NUM),
+    m_timer_cap(MAX_FD_NUM){
     initQue(&m_pool);
     m_lock = NULL;
     m_cache = NULL;
     m_datas = NULL;
+    m_timer_objs = NULL;
 
-    m_conn_timeout = 3;
-    m_rd_timeout = 60;
-    m_wr_timeout = 60;
+    m_conn_timeout = DEF_CONN_TIMEOUT_TICK;
+    m_rd_timeout = DEF_RDWR_TIMEOUT_TICK;
+    m_wr_timeout = DEF_RDWR_TIMEOUT_TICK;
 }
 
 ManageCenter::~ManageCenter() {
@@ -79,11 +83,18 @@ int ManageCenter::init() {
     
     m_cache = (GenData*)calloc(m_cap, sizeof(GenData));
     m_datas = (GenData**)calloc(m_cap, sizeof(GenData*));
+
+    m_timer_objs = (TimerObj*)calloc(m_timer_cap, sizeof(TimerObj));
     
     creatQue(&m_pool, m_cap);
+    creatQue(&m_timer_pool, m_timer_cap);
     
     for (int i=0; i<m_cap; ++i) {
         push(&m_pool, &m_cache[i]);
+    }
+
+    for (int i=0; i<m_timer_cap; ++i) {
+        push(&m_timer_pool, &m_timer_objs[i]);
     }
 
     return ret;
@@ -91,6 +102,7 @@ int ManageCenter::init() {
 
 void ManageCenter::finish() {
     finishQue(&m_pool);
+    finishQue(&m_timer_pool);
     
     if (NULL != m_datas) {
         free(m_datas);
@@ -104,6 +116,12 @@ void ManageCenter::finish() {
         m_cache = NULL;
     } 
 
+    if (NULL != m_timer_objs) {
+        free(m_timer_objs);
+
+        m_timer_objs = NULL;
+    }
+
     if (NULL != m_lock) {
         delete m_lock;
         m_lock = NULL;
@@ -116,6 +134,32 @@ void ManageCenter::lock() {
 
 void ManageCenter::unlock() {
     m_lock->unlock();
+}
+
+TimerObj* ManageCenter::allocTimer() {
+    bool bOk = NULL;
+    void* ele = NULL;
+    TimerObj* obj = NULL;
+    
+    lock();
+    bOk = pop(&m_timer_pool, &ele);
+    unlock();
+
+    if (bOk) {
+        obj = reinterpret_cast<TimerObj*>(ele);
+    }
+
+    return obj;
+}
+
+void ManageCenter::freeTimer(TimerObj* obj) {
+    if (NULL != obj) { 
+        TickTimer::initObj(obj);
+        
+        lock();
+        push(&m_timer_pool, obj);
+        unlock();
+    }
 }
 
 GenData* ManageCenter::_allocData() {
@@ -168,12 +212,34 @@ bool ManageCenter::exists(int fd) const {
 } 
 
 bool ManageCenter::isClosed(GenData* data) const {
-    return 0 < data->m_closing;
+    return !!data->m_closing;
 }
 
 bool ManageCenter::markClosed(GenData* data) {
-    return 0 == data->m_closing++;
+    bool close = false;
+    
+    lock();
+    close = !data->m_closing;
+    ++data->m_closing;
+    unlock();
+
+    return close;
 } 
+
+bool ManageCenter::markClosed(int fd) {
+    GenData* data = NULL;
+    bool close = false;
+    
+    lock();
+    if (0 < fd && m_cap > fd && NULL != m_datas[fd]) {
+        data = m_datas[fd];
+        close = !data->m_closing;
+        ++data->m_closing;
+    }
+    unlock();
+
+    return close;
+}
 
 long ManageCenter::getExtra(const GenData* data) {
     return data->m_extra;
@@ -682,17 +748,18 @@ NodeCmd* ManageCenter::creatCmdComm(EnumSockCmd cmd, int fd) {
 }
 
 NodeCmd* ManageCenter::creatCmdSchedTask(unsigned delay,
-    TFunc func, long data, long data2) {
+    unsigned interval, TimerFunc func, long data, long data2) {
     NodeCmd* pCmd = NULL;
     CmdSchedTask* body = NULL;
-        
-    pCmd = MsgUtil::creatCmd<CmdSchedTask>(ENUM_CMD_SCHED_TASK);
-    body = MsgUtil::getCmdBody<CmdSchedTask>(pCmd);
 
+    pCmd = MsgUtil::creatCmd<CmdSchedTask>(ENUM_CMD_SCHED_TASK);
+    body = MsgUtil::getCmdBody<CmdSchedTask>(pCmd); 
+        
     body->func = func;
     body->m_data = data;
     body->m_data2 = data2;
     body->m_delay = delay;
+    body->m_interval = interval;
 
     return pCmd;
 } 
@@ -753,11 +820,11 @@ bool ManageCenter::chkExpire(EnumDir enDir,
 
 int ManageCenter::recvMsg(GenData* data, int max) {
     int fd = getFd(data);
-    ISockComm* comm = NULL;
+    ISockBase* comm = NULL;
     int rdLen = 0;
     int ret = 0;
 
-    comm = dynamic_cast<ISockComm*>(data->m_sock);
+    comm = data->m_sock;
     if (NULL != comm) {
         if (0 == max || max > MAX_BUFF_SIZE) {
             max = MAX_BUFF_SIZE;
@@ -904,18 +971,18 @@ void ManageCenter::initSock(GenData* data) {
 }
 
 int ManageCenter::onNewSock(GenData* parentData,
-    int newFd, AccptOption& opt) {
+    GenData* childData, AccptOption& opt) {
     ISockSvr* svr = NULL;
-    int ret = 0;
+    int ret = 0; 
     int listenFd = getFd(parentData);
+    int newFd = getFd(childData);
 
     svr = dynamic_cast<ISockSvr*>(parentData->m_sock);
     if (NULL != svr) { 
         ret = svr->onNewSock(listenFd, newFd, opt);
-        if (0 == ret && NULL == opt.m_sock) {
-            /* check valid */
-            ret = -2;
-        } 
+        if (0 == ret) {
+            setData(childData, svr, opt.m_extra);
+        }
     } else {
         ret = -1;
     }
@@ -931,7 +998,10 @@ int ManageCenter::onConnect(GenData* data,
 
     cli = dynamic_cast<ISockCli*>(data->m_sock);
     if (NULL != cli) {
-        if (0 == data->m_wr_conn) {
+        if (0 == data->m_wr_conn) { 
+            LOG_INFO("connected| newfd=%d| peer=%s:%d|", 
+                fd, data->m_szIP, data->m_port);
+            
             ret = cli->onConnOK(fd, opt);
         } else {
             ret = data->m_wr_conn;
@@ -945,11 +1015,11 @@ int ManageCenter::onConnect(GenData* data,
 }
 
 int ManageCenter::onProcess(GenData* data, NodeMsg* msg) {
-    ISockComm* comm = NULL;
+    ISockBase* comm = NULL;
     int fd = data->m_fd;
     int ret = 0;
 
-    comm = dynamic_cast<ISockComm*>(data->m_sock);
+    comm = data->m_sock;
     if (NULL != comm) {
         ret = comm->process(fd, msg); 
     }
@@ -958,10 +1028,23 @@ int ManageCenter::onProcess(GenData* data, NodeMsg* msg) {
 }
 
 void ManageCenter::onClose(GenData* data) {
+    ISockBase* comm = NULL;
+    ISockSvr* svr = NULL;
     int fd = data->m_fd;
 
-    if (NULL != data->m_sock) {
-        data->m_sock->onClose(fd);
+    if (ENUM_DEAL_SOCK == data->m_deal_cb) {
+        comm = data->m_sock;
+        if (NULL != comm) {
+            comm->onClose(fd);
+        }
+    } else if (ENUM_DEAL_LISTENER == data->m_deal_cb) {
+        svr = dynamic_cast<ISockSvr*>(data->m_sock);
+
+        if (NULL != svr) {
+            svr->onListenerClose(fd);
+        }
+    } else {
+        /* do nothing */
     }
 }
 
