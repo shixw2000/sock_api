@@ -36,8 +36,6 @@ Clog* Clog::instance() {
 void Clog::initLog() {
     if (NULL == g_log) {
         g_log = new Clog;
-
-        g_log->allocCache();
     }
 }
 
@@ -69,8 +67,6 @@ Clog::Clog() {
     m_has_stdout = true;
     m_max_size = MAX_LOG_FILE_SIZE;
     m_max_log_cnt = MAX_LOG_FILE_CNT;
-
-    memset(m_caches, 0, sizeof(m_caches)); 
     
     memset(m_dir, 0, sizeof(m_dir));
     setDir(DEF_LOG_DIR);
@@ -79,50 +75,27 @@ Clog::Clog() {
 Clog::~Clog() {
 }
 
-int Clog::allocCache() {
-    char* psz = NULL;
-    int max = 0;
-    
-    max = MAX_CACHE_INDEX * MAX_LOG_CACHE_SIZE;
-    psz = (char*)malloc(max);
-    if (NULL != psz) {
-        for (int i=0; i<MAX_CACHE_INDEX; ++i) {
-            m_caches[i] = psz;
-            psz += MAX_LOG_CACHE_SIZE;
-        }
-
-        return 0;
-    } else {
-        return -1;
-    }
-}
-
 int Clog::init(const char* dir) {
     int ret = 0;
     int index = 0;
 
-    setDir(dir);
+    if (!m_bValid) {
+        setDir(dir); 
+        
+        ret = MiscTool::mkDir(m_dir);
+        if (0 == ret) { 
+            index = findIndex();
 
-    if (NULL == m_caches[0]) {
-        ret = allocCache();
-        if (0 != ret) {
-            return -1;
+            ret = openLog(index, true); 
+        } 
+
+        if (0 == ret) {
+            LOG_INFO("prog_start| log_dir=%s| version=%s|"
+                " msg=start now|", m_dir, DEF_BUILD_VER);
+        } else {
+            fprintf(stderr, "init_log| ret=%d| log_dir=%s|"
+                " msg=init log err|\n", ret, m_dir);
         }
-    } 
-
-    ret = MiscTool::mkDir(m_dir);
-    if (0 == ret) { 
-        index = findIndex();
-
-        ret = openLog(index, true); 
-    } 
-
-    if (0 == ret) {
-        LOG_INFO("prog_start| log_dir=%s| version=%s|"
-            " msg=start now|", m_dir, DEF_BUILD_VER);
-    } else {
-        fprintf(stderr, "init_log| ret=%d| log_dir=%s|"
-            " msg=init log err|\n", ret, m_dir);
     }
 
     return ret;
@@ -136,11 +109,6 @@ void Clog::finish() {
     if (0 < m_log_fd) {
         close(m_log_fd);
         m_log_fd = 0;
-    }
-
-    if (NULL != m_caches[0]) {
-        free(m_caches[0]);
-        memset(m_caches, 0, sizeof(m_caches));
     }
 }
 
@@ -345,19 +313,18 @@ void Clog::formatLog(int level, const char format[], ...) {
     int cnt = 0;
     int index = 0;
     unsigned tid = 0;
-    unsigned slot = 0; 
+    char cache[MAX_LOG_CACHE_SIZE] = {0};
 
-    if (level > m_log_level || NULL == m_caches[0]) {
+    if (level > m_log_level) {
         return;
     }
 
     index = m_curr_index;
     
     tid = MiscTool::getTid();
-    slot = tid & MASK_CACHE_INDEX;
 
-    psz = m_caches[slot];
-    maxlen = MAX_LOG_CACHE_SIZE - 1;
+    psz = cache;
+    maxlen = MAX_LOG_CACHE_SIZE - 1; // last has a LF char
 
     cnt = snprintf(psz, maxlen, "[%s]", DEF_LOG_DESC[level]);
     psz += cnt;
@@ -390,7 +357,7 @@ void Clog::formatLog(int level, const char format[], ...) {
     ++size;
 
     if (m_bValid) {
-        cnt = write(m_log_fd, m_caches[slot], size);
+        cnt = write(m_log_fd, cache, size);
         if (0 < cnt) {
             m_curr_size += cnt; 
 
@@ -401,7 +368,7 @@ void Clog::formatLog(int level, const char format[], ...) {
     }
     
     if (m_has_stdout) {
-        write(DEF_STDOUT_FD, m_caches[slot], size); 
+        write(DEF_STDOUT_FD, cache, size); 
     } 
 }
 

@@ -16,7 +16,6 @@
 #include<errno.h>
 #include<fcntl.h>
 #include<sys/stat.h>
-#include<sys/random.h>
 #include"misc.h"
 #include"clog.h"
 
@@ -44,7 +43,7 @@ static int _getDevHd() {
         MiscTool::setNonBlock(fd);
         return fd;
     } else {
-        fd = open("/dev/random", O_RDONLY|O_NONBLOCK);
+        fd = open("/dev/random", O_RDONLY);
         if (0 < fd) {
             MiscTool::setNonBlock(fd);
             return fd;
@@ -342,11 +341,24 @@ int MiscTool::creatPipes(int (*pfds)[2]) {
 }
 
 void MiscTool::getRand(void* buf, int len) {
+    int* pn = (int*)buf; 
+    int r = 0;
+    int n = 0;
+    
     if (0 < len) {
         if (0 < g_global.m_dev_fd) {
             read(g_global.m_dev_fd, buf, len);
         } else {
-            getrandom(buf, len, GRND_NONBLOCK);
+            r = (len >> 2);
+            for (int i=0; i<r; ++i, ++pn) {
+                *pn = rand();
+            }
+
+            r = (len & 0x3);
+            if (0 < r) {
+                n = rand();
+                memcpy(pn, &n, r);
+            }
         } 
     }
 } 

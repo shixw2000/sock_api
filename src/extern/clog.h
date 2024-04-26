@@ -16,9 +16,7 @@ class Clog {
     static const int MAX_LOG_FILE_SIZE = 0x800000;
     static const int MAX_LOG_FILE_CNT = 3;
     static const int MAX_LOG_NAME_SIZE = 32;
-    static const int MAX_LOG_CACHE_SIZE = 0x1000; // 4KB
-    static const int MAX_CACHE_INDEX = (0x1 << 7);    // 128 max
-    static const unsigned MASK_CACHE_INDEX = MAX_CACHE_INDEX - 1;
+    static const int MAX_LOG_CACHE_SIZE = 0x1000; // 4KB, in stack frame
     static const int DEF_STDOUT_FD = 1;
 
     Clog();
@@ -45,7 +43,6 @@ public:
     
 private: 
     void setDir(const char dir[]);
-    int allocCache();
     int preTag(unsigned tid, char stamp[], int max);
     int findIndex();
     int openLog(int index, bool append);
@@ -56,7 +53,6 @@ private:
     friend void _finishLog();
     
 private:
-    char* m_caches[MAX_CACHE_INDEX];
     long m_curr_size;
     long m_max_size;
     int m_max_log_cnt;

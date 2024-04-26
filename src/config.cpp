@@ -290,14 +290,14 @@ int Config::getItemCnt(const typeStr& sec,
         } else {
             LOG_ERROR("get_item_cnt| conf_file=%s| sec=%s| key=%s|"
                 " msg=key of number not exists|", 
-                m_name, sec.c_str(), name);
+                m_name, sec.c_str(), name.c_str());
             
             ret = -2;
         }
     } else {
         LOG_ERROR("get_item_cnt| conf_file=%s| sec=%s| key=%s|"
             " msg=sec not exists|", 
-            m_name, sec.c_str(), name);
+            m_name, sec.c_str(), name.c_str());
         ret = -1;
     }
 
