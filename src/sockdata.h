@@ -6,7 +6,6 @@
 
 
 struct NodeMsg;
-struct NodeCmd;
 struct GenData; 
 
 static const int DEF_TICK_MSEC = 250;
@@ -95,11 +94,6 @@ struct TimerObj {
     long m_data2;
     unsigned m_expire;
     unsigned m_interval;
-};
-
-struct CmdHead_t {
-    int m_cmd;
-    char m_body[0];
 };
 
 struct CmdComm {

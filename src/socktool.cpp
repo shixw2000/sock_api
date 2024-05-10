@@ -246,24 +246,113 @@ int SockTool::recvTcp(int fd, void* buf, int max) {
 }
 
 int SockTool::sendTcp(int fd, const void* psz, int max) {
-    int ret = 0;
-    int cnt = 0;
+    int sndlen = 0;
 
     if (0 < max) {
-        cnt = send(fd, psz, max, MSG_NOSIGNAL);
-        if (0 <= cnt) {
+        sndlen = send(fd, psz, max, MSG_NOSIGNAL);
+        if (0 <= sndlen) {
             LOG_DEBUG("sendTcp| fd=%d| maxlen=%d| wrlen=%d| msg=ok|",
-                fd, max, cnt);
-            ret = cnt;
+                fd, max, sndlen);
         } else if (EAGAIN == errno) {
-            LOG_DEBUG("sendTcp| fd=%d| maxlen=%d| msg=write block|",
+            LOG_VERB("sendTcp| fd=%d| maxlen=%d| msg=write block|",
                 fd, max);
-            ret = 0;
+            sndlen = 0;
         } else {
             LOG_INFO("sendTcp| fd=%d| maxlen=%d| msg=write error:%s|",
                 fd, max, strerror(errno));
-            ret = -1;
+            sndlen = -1;
         }
+    }
+
+    return sndlen;
+}
+
+int SockTool::sendVec(int fd, struct iovec* iov,
+    int size, int maxlen) {
+    int sndlen = 0;
+    int flag = MSG_NOSIGNAL;
+    struct msghdr msg;
+
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_iov = iov;
+    msg.msg_iovlen = size;
+
+    sndlen = sendmsg(fd, &msg, flag);
+    if (0 <= sndlen) {
+        LOG_DEBUG("sendVec| fd=%d| size=%d|"
+            " maxlen=%d| sndlen=%d| msg=ok|",
+            fd, size, maxlen, sndlen);
+	} else if (EAGAIN == errno) {
+        LOG_VERB("sendVec| fd=%d| size=%d|"
+            " maxlen=%d| msg=write block|",
+            fd, size, maxlen);
+		sndlen = 0;
+	} else {
+		LOG_INFO("sendVec| fd=%d| size=%d|"
+            " maxlen=%d| error=%s|",
+            fd, size, maxlen, strerror(errno));
+		sndlen = -1;
+	}
+
+    return sndlen;
+}
+
+int SockTool::recvVec(int fd, struct iovec* iov, 
+    int size, int maxlen) {
+    int rdlen = 0;
+    struct msghdr msg;
+
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_iov = iov;
+    msg.msg_iovlen = size;
+
+    rdlen = recvmsg(fd, &msg, 0);
+    if (0 < rdlen) {
+        LOG_DEBUG("recvVec| fd=%d| maxlen=%d|"
+            " rdlen=%d| msg=ok|",
+            fd, maxlen, rdlen);
+	} else if (-1 == rdlen && EAGAIN == errno) {
+		rdlen = 0; 
+	} else if (0 == rdlen) { 
+	    LOG_INFO("recvVec| fd=%d| maxlen=%d|"
+            " msg=peer closed|",
+            fd, maxlen);
+		rdlen = -2;
+	} else {
+		LOG_INFO("recvVec| fd=%d| maxlen=%d| error=%s|",
+            fd, maxlen, strerror(errno));
+		rdlen = -1;
+	}
+
+    return rdlen;
+}
+
+int SockTool::sendBuffers(int fd,
+    const void* buf1, int size1,
+    const void* buf2, int size2) {
+    struct iovec vecs[2];
+    int total = 0;
+    int cnt = 0;
+    int ret = 0;
+
+    memset(vecs, 0, sizeof(vecs));
+    
+    if (0 < size1) {
+        total += size1;
+        vecs[cnt].iov_base = (void*)buf1;
+        vecs[cnt].iov_len = size1;
+        ++cnt;
+    }
+
+    if (0 < size2) {
+        total += size2;
+        vecs[cnt].iov_base = (void*)buf2;
+        vecs[cnt].iov_len = size2;
+        ++cnt;
+    }
+
+    if (0 < cnt) {
+        ret = sendVec(fd, vecs, cnt, total);
     }
 
     return ret;

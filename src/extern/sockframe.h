@@ -30,6 +30,12 @@ public:
     void setTimeout(unsigned rd_timeout, 
         unsigned wr_timeout);
 
+    /* seconds */
+    void setMaxRdTimeout(int fd, unsigned timeout);
+    void setMaxWrTimeout(int fd, unsigned timeout);
+
+    int getAddr(int fd, int* pPort, char ip[], int max);
+    
     long getExtra(int fd);
 
     /* unit: kilo bytes */

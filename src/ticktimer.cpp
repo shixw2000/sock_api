@@ -2,6 +2,7 @@
 #include<cstdlib>
 #include"ticktimer.h"
 #include"shareheader.h"
+#include"cache.h"
 
 
 TickTimer::TickTimer() {
@@ -143,7 +144,7 @@ void TickTimer::setTimerCb(TimerObj* ele,
 TimerObj* TickTimer::allocObj() {
     TimerObj* obj = NULL;
 
-    obj = (TimerObj*)malloc(sizeof(TimerObj));
+    obj = (TimerObj*)CacheUtil::mallocAlign(sizeof(TimerObj));
     if (NULL != obj) {
         initObj(obj);
     }
@@ -153,7 +154,7 @@ TimerObj* TickTimer::allocObj() {
 
 void TickTimer::freeObj(TimerObj* obj) {
     if (NULL != obj) {
-        free(obj);
+        CacheUtil::freeAlign(obj);
     }
 }
 

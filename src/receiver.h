@@ -25,11 +25,8 @@ public:
     GenData* find(int fd) const;
     bool exists(int fd) const;
     
-    int addCmd(NodeCmd* pCmd);
-    int activate(GenData* data); 
-
-    void flowCtlCallback(GenData* data);
-
+    int addCmd(NodeMsg* pCmd);
+    int activate(GenData* data);
 
 private: 
     void run();
@@ -52,9 +49,10 @@ private:
     int _activate(GenData* data, int stat);
     void detach(GenData* data, int stat);
 
-    void dealFlashTimeout(unsigned now, LList* list);
-    void addFlashTimeout(unsigned now, 
-        LList* list, GenData* data);
+    void flowCtlCb(GenData* data);
+    void dealTimeoutCb(GenData* data);
+    void addFlashTimeout(GenData* data,
+        bool force = false);
 
     void dealRunQue(LList* list); 
     void callback(GenData* data);
@@ -63,25 +61,25 @@ private:
     void readListener(GenData* data);
 
     void dealCmds(LList* list); 
-    void procCmd(NodeCmd* base);
-    void cmdAddFd(NodeCmd* base);
-    void cmdRemoveFd(NodeCmd* base);
+    void procCmd(NodeMsg* base);
+    void cmdAddFd(NodeMsg* base);
+    void cmdRemoveFd(NodeMsg* base);
 
-    void _AddFd(NodeCmd* base, bool delay);
-    void cmdDelayFd(NodeCmd* base);
-    void cmdUndelayFd(NodeCmd* base);
+    void _AddFd(NodeMsg* base, bool delay);
+    void cmdDelayFd(NodeMsg* base);
+    void cmdUndelayFd(NodeMsg* base);
 
     void flowCtl(GenData* data, unsigned total);
 
     void cbTimer1Sec();
     void startTimer1Sec();
-    static bool recvSecCb(long data1, long, TimerObj*);
+    static bool recvSecCb(long, long, TimerObj*);
+    static bool recvTimeoutCb(long, long, TimerObj*);
 
 private:
     static PRdFunc m_func[ENUM_RD_END];
     LList m_run_queue;
     LList m_cmd_queue;
-    LList m_time_flash_queue;
     bool m_busy;
     unsigned m_tick;
     Lock* m_lock;
@@ -90,6 +88,7 @@ private:
     Director* m_director;
     TickTimer* m_timer;
     TimerObj* m_1sec_obj;
+    unsigned m_now_sec;
     int m_size;
     int m_ev_fd[2];
     int m_timer_fd; 

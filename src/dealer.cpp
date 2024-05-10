@@ -2,13 +2,15 @@
 #include<cstring>
 #include"shareheader.h"
 #include"dealer.h"
-#include"msgutil.h"
+#include"msgtool.h"
 #include"director.h"
 #include"managecenter.h"
 #include"ticktimer.h"
 #include"lock.h"
 #include"misc.h"
 #include"socktool.h"
+#include"cmdcache.h"
+#include"nodebase.h"
 
 
 bool Dealer::dealSecCb(long data1, long, TimerObj*) {
@@ -184,9 +186,9 @@ int Dealer::notifyTimer(unsigned tick) {
     return 0;
 }
 
-int Dealer::addCmd(NodeCmd* pCmd) {
+int Dealer::addCmd(NodeMsg* pCmd) {
     lock(); 
-    MsgUtil::addNodeCmd(&m_cmd_queue, pCmd);
+    NodeUtil::queue(&m_cmd_queue, pCmd);
     if (!m_busy) {
         m_busy = true;
         signal();
@@ -264,7 +266,7 @@ int Dealer::dispatch(int fd, NodeMsg* pMsg) {
         unlock(); 
         return 0;
     } else {
-        MsgUtil::freeNodeMsg(pMsg);
+        NodeUtil::freeNode(pMsg);
         return -1;
     }
 }
@@ -272,14 +274,14 @@ int Dealer::dispatch(int fd, NodeMsg* pMsg) {
 void Dealer::dealCmds(LList* list) {
     LList* n = NULL;
     LList* node = NULL;
-    NodeCmd* base = NULL;
+    NodeMsg* base = NULL;
 
     for_each_list_safe(node, n, list) {
-        base = MsgUtil::toNodeCmd(node); 
+        base = NodeUtil::toNode(node); 
         del(node);
 
         procCmd(base);
-        MsgUtil::freeNodeCmd(base);
+        NodeUtil::freeNode(base);
     }
 }
 
@@ -334,14 +336,14 @@ void Dealer::procMsg(GenData* data) {
     if (!isEmpty(&runlist)) {
         while (!isEmpty(&runlist)) {
             node = first(&runlist);
-            base = MsgUtil::toNodeMsg(node);
+            base = NodeUtil::toNode(node);
             del(node);
 
             if (0 == ret) {
                 ret = m_center->onProcess(data, base);
             }
             
-            MsgUtil::freeNodeMsg(base);
+            NodeUtil::freeNode(base);
         }
 
         if (0 == ret) {
@@ -357,11 +359,11 @@ void Dealer::procMsg(GenData* data) {
     }
 }
 
-void Dealer::procCmd(NodeCmd* pCmd) { 
-    CmdHead_t* pHead = NULL;
+void Dealer::procCmd(NodeMsg* pCmd) { 
+    int cmd = 0;
 
-    pHead = MsgUtil::getCmd(pCmd);
-    switch (pHead->m_cmd) { 
+    cmd = CmdUtil::getCmd(pCmd);
+    switch (cmd) { 
     case ENUM_CMD_REMOVE_FD:
         cmdRemoveFd(pCmd);
         break;
@@ -445,12 +447,12 @@ void Dealer::procListener(GenData* listenData) {
     }
 }
 
-void Dealer::cmdRemoveFd(NodeCmd* base) { 
+void Dealer::cmdRemoveFd(NodeMsg* base) { 
     int fd = -1;
     CmdComm* pCmd = NULL;
     GenData* data = NULL;
 
-    pCmd = MsgUtil::getCmdBody<CmdComm>(base);
+    pCmd = CmdUtil::getCmdBody<CmdComm>(base);
     fd = pCmd->m_fd;
 
     LOG_INFO("dealer_remove_fd| fd=%d|", fd);
@@ -468,7 +470,7 @@ void Dealer::cmdRemoveFd(NodeCmd* base) {
 static bool _sheduleDealerTask(long param1, 
     long param2, TimerObj* obj) {
     ManageCenter* center = (ManageCenter*)param1;
-    NodeCmd* base = (NodeCmd*)param2;
+    NodeMsg* base = (NodeMsg*)param2;
     CmdSchedTask* body = NULL;
     TimerFunc func = NULL;
     long data = 0;
@@ -476,7 +478,7 @@ static bool _sheduleDealerTask(long param1,
     bool bOk = false;
     TimerObj* ele = NULL;
 
-    body = MsgUtil::getCmdBody<CmdSchedTask>(base);
+    body = CmdUtil::getCmdBody<CmdSchedTask>(base);
     func = body->func;
     data = body->m_data;
     data2 = body->m_data2;
@@ -488,20 +490,20 @@ static bool _sheduleDealerTask(long param1,
         ele = (TimerObj*)obj;
         
         center->freeTimer(ele);
-        MsgUtil::freeNodeCmd(base);
+        NodeUtil::freeNode(base);
 
         return false;
     }
 }
 
-void Dealer::cmdSchedTask(NodeCmd* base) { 
-    NodeCmd* refCmd = NULL;
+void Dealer::cmdSchedTask(NodeMsg* base) { 
+    NodeMsg* refCmd = NULL;
     CmdSchedTask* body = NULL;
     TimerObj* obj = NULL;
     unsigned delay = 0;
     unsigned interval = 0; 
 
-    body = MsgUtil::getCmdBody<CmdSchedTask>(base);
+    body = CmdUtil::getCmdBody<CmdSchedTask>(base);
     delay = body->m_delay;
     interval = body->m_interval;
 
@@ -509,7 +511,7 @@ void Dealer::cmdSchedTask(NodeCmd* base) {
         obj = m_center->allocTimer();
 
         if (NULL != obj) {
-            refCmd = MsgUtil::refNodeCmd(base);
+            refCmd = NodeUtil::refNode(base);
             TickTimer::setTimerCb(obj, &_sheduleDealerTask, 
                 (long)m_center, (long)refCmd);
   

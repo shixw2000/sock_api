@@ -24,7 +24,7 @@ public:
     GenData* find(int fd) const;
     bool exists(int fd) const;
     
-    int addCmd(NodeCmd* pCmd);
+    int addCmd(NodeMsg* pCmd);
     int dispatch(int fd, NodeMsg* pMsg);
     int activate(GenData* data); 
     int notifyTimer(unsigned tick);
@@ -53,9 +53,9 @@ private:
     void procListener(GenData* listenData);
     
     void dealCmds(LList* list); 
-    void procCmd(NodeCmd* base);
-    void cmdRemoveFd(NodeCmd* base); 
-    void cmdSchedTask(NodeCmd* base);
+    void procCmd(NodeMsg* base);
+    void cmdRemoveFd(NodeMsg* base); 
+    void cmdSchedTask(NodeMsg* base);
 
     void onAccept(GenData* listenData,
         int newFd, const char ip[], int port);

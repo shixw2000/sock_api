@@ -1,12 +1,14 @@
 #include<cstring>
 #include<cstdlib>
 #include"managecenter.h"
-#include"msgutil.h"
+#include"msgtool.h"
 #include"lock.h"
 #include"ticktimer.h"
 #include"misc.h"
 #include"isockapi.h"
 #include"socktool.h"
+#include"cmdcache.h"
+#include"nodebase.h"
 
 
 struct GenData { 
@@ -14,15 +16,18 @@ struct GenData {
     LList m_wr_node;
     LList m_deal_node;
 
-    LList m_rd_timeout_node;
-    LList m_wr_timeout_node;
-
     LList m_wr_msg_que;
     LList m_wr_msg_que_priv;
     LList m_deal_msg_que;
 
-    TimerObj m_rd_flowctl;
-    TimerObj m_wr_flowctl;
+    TimerObj m_rd_timer_obj;
+    TimerObj m_wr_timer_obj;
+    int m_rd_timer_event;
+    int m_wr_timer_event;
+    unsigned m_rd_timeout_thresh;
+    unsigned m_rd_updated;
+    unsigned m_wr_timeout_thresh;
+    unsigned m_wr_updated;
     
     ISockBase* m_sock;
     long m_extra;
@@ -31,7 +36,7 @@ struct GenData {
 
     int m_rd_stat;
     int m_rd_index;
-    int m_rd_cb; 
+    int m_rd_cb;
     
     int m_wr_stat;
     int m_wr_cb;
@@ -41,11 +46,6 @@ struct GenData {
     int m_deal_cb; 
 
     unsigned m_closing; 
-
-    unsigned m_rd_timeout_thresh;
-    unsigned m_rd_expire;
-    unsigned m_wr_timeout_thresh;
-    unsigned m_wr_expire;
     
     unsigned m_rd_thresh;
     unsigned m_wr_thresh;
@@ -81,10 +81,14 @@ int ManageCenter::init() {
     
     m_lock = new SpinLock;
     
-    m_cache = (GenData*)calloc(m_cap, sizeof(GenData));
-    m_datas = (GenData**)calloc(m_cap, sizeof(GenData*));
+    m_cache = (GenData*)CacheUtil::callocAlign(
+        m_cap, sizeof(GenData));
+    
+    m_datas = (GenData**)CacheUtil::callocAlign(
+        m_cap, sizeof(GenData*));
 
-    m_timer_objs = (TimerObj*)calloc(m_timer_cap, sizeof(TimerObj));
+    m_timer_objs = (TimerObj*)CacheUtil::callocAlign(
+        m_timer_cap, sizeof(TimerObj));
     
     creatQue(&m_pool, m_cap);
     creatQue(&m_timer_pool, m_timer_cap);
@@ -105,19 +109,19 @@ void ManageCenter::finish() {
     finishQue(&m_timer_pool);
     
     if (NULL != m_datas) {
-        free(m_datas);
+        CacheUtil::freeAlign(m_datas);
 
         m_datas = NULL;
     }
 
     if (NULL != m_cache) {
-        free(m_cache);
+        CacheUtil::freeAlign(m_cache);
 
         m_cache = NULL;
     } 
 
     if (NULL != m_timer_objs) {
-        free(m_timer_objs);
+        CacheUtil::freeAlign(m_timer_objs);
 
         m_timer_objs = NULL;
     }
@@ -137,7 +141,7 @@ void ManageCenter::unlock() {
 }
 
 TimerObj* ManageCenter::allocTimer() {
-    bool bOk = NULL;
+    bool bOk = false;
     void* ele = NULL;
     TimerObj* obj = NULL;
     
@@ -163,7 +167,7 @@ void ManageCenter::freeTimer(TimerObj* obj) {
 }
 
 GenData* ManageCenter::_allocData() {
-    bool bOk = NULL;
+    bool bOk = false;
     void* ele = NULL;
     GenData* obj = NULL;
     
@@ -178,9 +182,6 @@ GenData* ManageCenter::_allocData() {
         initList(&obj->m_rd_node);
         initList(&obj->m_wr_node);
         initList(&obj->m_deal_node);
-
-        initList(&obj->m_rd_timeout_node);
-        initList(&obj->m_wr_timeout_node);
 
         initList(&obj->m_wr_msg_que);
         initList(&obj->m_deal_msg_que);
@@ -408,15 +409,31 @@ void ManageCenter::delNode(EnumDir enDir, GenData* data) {
     }
 } 
 
-void ManageCenter::addTimeout(EnumDir enDir, 
-    LList* root, GenData* data) {
+void ManageCenter::enableTimer(EnumDir enDir, 
+    TickTimer* timer, GenData* data, int event) {
+    unsigned delay = 0; 
+        
     switch (enDir) {
     case ENUM_DIR_RECVER:
-        add(root, &data->m_rd_timeout_node);
+        if (ENUM_TIMER_EVENT_FLOWCTL != event) {
+            delay = data->m_rd_timeout_thresh;
+        } else {
+            delay = DEF_FLOWCTL_TICK_NUM;
+        }
+            
+        data->m_rd_timer_event = event;
+        timer->schedule(&data->m_rd_timer_obj, delay);
         break;
 
     case ENUM_DIR_SENDER:
-        add(root, &data->m_wr_timeout_node);
+        if (ENUM_TIMER_EVENT_FLOWCTL != event) {
+            delay = data->m_wr_timeout_thresh;
+        } else {
+            delay = DEF_FLOWCTL_TICK_NUM;
+        }
+        
+        data->m_wr_timer_event = event;
+        timer->schedule(&data->m_wr_timer_obj, delay);
         break;
 
     case ENUM_DIR_DEALER:
@@ -425,67 +442,14 @@ void ManageCenter::addTimeout(EnumDir enDir,
     }
 } 
 
-GenData* ManageCenter::fromTimeout(EnumDir enDir, LList* node) {
-    GenData* data = NULL;
-
+void ManageCenter::cancelTimer(EnumDir enDir, GenData* data) {
     switch (enDir) {
     case ENUM_DIR_RECVER:
-        data = CONTAINER(node, GenData, m_rd_timeout_node);
+        TickTimer::delTimer(&data->m_rd_timer_obj);
         break;
 
     case ENUM_DIR_SENDER:
-        data = CONTAINER(node, GenData, m_wr_timeout_node);
-        break;
-
-    case ENUM_DIR_DEALER:
-    default:
-        break;
-    }
-
-    return data;
-}
-
-void ManageCenter::delTimeout(EnumDir enDir, GenData* data) {
-    switch (enDir) {
-    case ENUM_DIR_RECVER:
-        del(&data->m_rd_timeout_node);
-        break;
-
-    case ENUM_DIR_SENDER:
-        del(&data->m_wr_timeout_node);
-        break;
-
-    case ENUM_DIR_DEALER:
-    default:
-        break;
-    }
-} 
-
-void ManageCenter::flowctl(EnumDir enDir, 
-    TickTimer* timer, GenData* data) {
-    switch (enDir) {
-    case ENUM_DIR_RECVER:
-        timer->schedule(&data->m_rd_flowctl, DEF_FLOWCTL_TICK_NUM);
-        break;
-
-    case ENUM_DIR_SENDER:
-        timer->schedule(&data->m_wr_flowctl, DEF_FLOWCTL_TICK_NUM);
-        break;
-
-    case ENUM_DIR_DEALER:
-    default:
-        break;
-    }
-} 
-
-void ManageCenter::unflowctl(EnumDir enDir, GenData* data) {
-    switch (enDir) {
-    case ENUM_DIR_RECVER:
-        TickTimer::delTimer(&data->m_rd_flowctl);
-        break;
-
-    case ENUM_DIR_SENDER:
-        TickTimer::delTimer(&data->m_wr_flowctl);
+        TickTimer::delTimer(&data->m_wr_timer_obj);
         break;
 
     case ENUM_DIR_DEALER:
@@ -494,24 +458,46 @@ void ManageCenter::unflowctl(EnumDir enDir, GenData* data) {
     } 
 }
 
-void ManageCenter::setFlowctl(EnumDir enDir,
-    GenData* data, TFunc func, long ptr) {
+void ManageCenter::setTimerParam(EnumDir enDir, 
+    GenData* data, TFunc func, long param1) {
         
     switch (enDir) {
     case ENUM_DIR_RECVER:
-        TickTimer::setTimerCb(&data->m_rd_flowctl, 
-            func, ptr, (long)data);
+        TickTimer::setTimerCb(&data->m_rd_timer_obj, 
+            func, param1, 
+            (long)&data->m_rd_timer_event);
         break;
 
     case ENUM_DIR_SENDER:
-        TickTimer::setTimerCb(&data->m_wr_flowctl, 
-            func, ptr, (long)data);
+        TickTimer::setTimerCb(&data->m_wr_timer_obj, 
+            func, param1, 
+            (long)&data->m_wr_timer_event);
         break;
 
     case ENUM_DIR_DEALER:
     default:
         break;
     }
+}
+
+GenData* ManageCenter::fromTimeout(EnumDir enDir, TimerObj* obj) {
+    GenData* data = NULL;
+
+    switch (enDir) {
+    case ENUM_DIR_RECVER:
+        data = CONTAINER(obj, GenData, m_rd_timer_obj);
+        break;
+
+    case ENUM_DIR_SENDER:
+        data = CONTAINER(obj, GenData, m_wr_timer_obj);
+        break;
+
+    case ENUM_DIR_DEALER:
+    default:
+        break;
+    }
+
+    return data;
 }
 
 void ManageCenter::recordBytes(EnumDir enDir, 
@@ -664,13 +650,23 @@ void ManageCenter::setSpeed(GenData* data,
     data->m_wr_thresh = wr_thresh;
 }
 
-void ManageCenter::setConnTimeout(GenData* data) {
+void ManageCenter::setDefConnTimeout(GenData* data) {
     data->m_wr_timeout_thresh = m_conn_timeout;
 }
 
-void ManageCenter::setIdleTimeout(GenData* data) {
+void ManageCenter::setDefIdleTimeout(GenData* data) {
     data->m_rd_timeout_thresh = m_rd_timeout;
     data->m_wr_timeout_thresh = m_wr_timeout;
+}
+
+void ManageCenter::setMaxRdTimeout(
+    GenData* data, unsigned timeout) {
+    data->m_rd_timeout_thresh = timeout;
+}
+
+void ManageCenter::setMaxWrTimeout(
+    GenData* data, unsigned timeout) {
+    data->m_wr_timeout_thresh = timeout;
 }
 
 void ManageCenter::setTimeout(unsigned rd_timeout,
@@ -683,6 +679,34 @@ void ManageCenter::setAddr(GenData* data,
     const char szIP[], int port) {
     data->m_port = port;
     strncpy(data->m_szIP, szIP, sizeof(data->m_szIP)-1);
+}
+
+int ManageCenter::getAddr(int fd, int* pPort,
+    char ip[], int max) {
+    GenData* data = NULL;
+    int ret = 0;
+    int port = 0;
+    char buf[DEF_IP_SIZE] = {0};
+
+    if (exists(fd)) {
+        data = find(fd);
+        port = data->m_port;
+        strncpy(buf, data->m_szIP, DEF_IP_SIZE);
+  
+        ret = 0; 
+    } else {
+        ret = -1;
+    }
+
+    if (NULL != pPort) {
+        *pPort = port;
+    }
+    
+    if (0 < max) {
+        strncpy(ip, buf, max);
+    }
+    
+    return ret; 
 }
 
 void ManageCenter::setData(GenData* data,
@@ -723,9 +747,6 @@ void ManageCenter::unreg(int fd) {
         initList(&data->m_wr_node);
         initList(&data->m_deal_node);
 
-        initList(&data->m_rd_timeout_node);
-        initList(&data->m_wr_timeout_node);
-
         initList(&data->m_wr_msg_que);
         initList(&data->m_wr_msg_que_priv);
         initList(&data->m_deal_msg_que); 
@@ -736,24 +757,24 @@ void ManageCenter::unreg(int fd) {
     }
 }
 
-NodeCmd* ManageCenter::creatCmdComm(EnumSockCmd cmd, int fd) {
-    NodeCmd* pCmd = NULL;
+NodeMsg* ManageCenter::creatCmdComm(EnumSockCmd cmd, int fd) {
+    NodeMsg* pCmd = NULL;
     CmdComm* body = NULL;
     
-    pCmd = MsgUtil::creatCmd<CmdComm>(cmd);
-    body = MsgUtil::getCmdBody<CmdComm>(pCmd);
+    pCmd = CmdUtil::creatCmd<CmdComm>(cmd);
+    body = CmdUtil::getCmdBody<CmdComm>(pCmd);
     body->m_fd = fd;
 
     return pCmd;
 }
 
-NodeCmd* ManageCenter::creatCmdSchedTask(unsigned delay,
+NodeMsg* ManageCenter::creatCmdSchedTask(unsigned delay,
     unsigned interval, TimerFunc func, long data, long data2) {
-    NodeCmd* pCmd = NULL;
+    NodeMsg* pCmd = NULL;
     CmdSchedTask* body = NULL;
 
-    pCmd = MsgUtil::creatCmd<CmdSchedTask>(ENUM_CMD_SCHED_TASK);
-    body = MsgUtil::getCmdBody<CmdSchedTask>(pCmd); 
+    pCmd = CmdUtil::creatCmd<CmdSchedTask>(ENUM_CMD_SCHED_TASK);
+    body = CmdUtil::getCmdBody<CmdSchedTask>(pCmd); 
         
     body->func = func;
     body->m_data = data;
@@ -765,20 +786,20 @@ NodeCmd* ManageCenter::creatCmdSchedTask(unsigned delay,
 } 
 
 bool ManageCenter::updateExpire(EnumDir enDir, 
-    GenData* data, unsigned now) {
+    GenData* data, unsigned now, bool force) {
     const unsigned* pt = NULL;
     unsigned* pe = NULL;
     bool action = false;
-    
+
     switch (enDir) {
     case ENUM_DIR_RECVER:
         pt = &data->m_rd_timeout_thresh;
-        pe = &data->m_rd_expire;
+        pe = &data->m_rd_updated;
         break;
 
     case ENUM_DIR_SENDER:
         pt = &data->m_wr_timeout_thresh;
-        pe = &data->m_wr_expire;
+        pe = &data->m_wr_updated;
         break;
 
     default:
@@ -787,35 +808,14 @@ bool ManageCenter::updateExpire(EnumDir enDir,
     }
 
     if (0 < *pt) {
-        *pe = now + *pt;
-        action = true;
+        /* reduce update too frequently */
+        if (now != *pe || force) {
+            *pe = now;
+            action = true;
+        }
     } 
 
     return action;
-}
-
-bool ManageCenter::chkExpire(EnumDir enDir, 
-    const GenData* data, unsigned now) {
-    const unsigned* pt = NULL;
-    const unsigned* pe = NULL;
-    
-    switch (enDir) {
-    case ENUM_DIR_RECVER:
-        pt = &data->m_rd_timeout_thresh;
-        pe = &data->m_rd_expire;
-        break;
-
-    case ENUM_DIR_SENDER:
-        pt = &data->m_wr_timeout_thresh;
-        pe = &data->m_wr_expire;
-        break;
-
-    default:
-        return false;
-        break;
-    }
-
-    return (*pe - now) > *pt;
 }
 
 int ManageCenter::recvMsg(GenData* data, int max) {
@@ -881,35 +881,96 @@ void ManageCenter::releaseMsgQue(LList* list) {
     
     if (!isEmpty(list)) {
         for_each_list_safe(node, n, list) {
-            base = MsgUtil::toNodeMsg(node);
+            base = NodeUtil::toNode(node);
             del(node);
-            MsgUtil::freeNodeMsg(base);
+            NodeUtil::freeNode(base);
         }
     }
 }
 
 int ManageCenter::writeMsg(int fd, NodeMsg* pMsg, int max) {
     int ret = 0;
-    int size = 0;
+    int len = 0;
     int pos = 0;
     char* psz = NULL;
 
-    size = MsgUtil::getMsgSize(pMsg);
-    pos = MsgUtil::getMsgPos(pMsg);
-    psz = MsgUtil::getMsg(pMsg);
-
-    psz += pos;
-    size -= pos;
+    len = MsgTool::getLeft(pMsg);
+    if (0 < len) {
+        pos = MsgTool::getMsgPos(pMsg);
+        psz = MsgTool::getMsg(pMsg) + pos;
     
-    if (0 < size) {
-        if (0 < max && size > max) {
-            size = max;
+        if (0 < max && len > max) {
+            len = max;
         }
         
-        ret = SockTool::sendTcp(fd, psz, size);
+        ret = SockTool::sendTcp(fd, psz, len);
         if (0 < ret) {
-            MsgUtil::skipMsgPos(pMsg, ret);
+            MsgTool::skipMsgPos(pMsg, ret);
         } 
+    }
+
+    return ret;
+}
+
+int ManageCenter::writeExtraMsg(int fd, NodeMsg* pMsg, int max) {
+    int ret = 0;
+    int len1 = 0;
+    int len2 = 0;
+    int pos1 = 0;
+    int pos2 = 0;
+    int size1 = 0;
+    int size2 = 0;
+    char* str1 = NULL;
+    char* str2 = NULL;
+
+    size1 = MsgTool::getLeft(pMsg);
+    if (0 < size1) { 
+        pos1 = MsgTool::getMsgPos(pMsg);
+        str1 = MsgTool::getMsg(pMsg) + pos1;
+    } 
+    
+    size2 = MsgTool::getExtraLeft(pMsg);
+    if (0 < size2) {
+        pos2 = MsgTool::getExtraPos(pMsg);
+        str2 = MsgTool::getExtraMsg(pMsg) + pos2;
+    }
+
+    if (0 < max) {
+        if (size1 <= max) {
+            len1 = size1;
+            max -= size1;
+        } else {
+            len1 = max;
+            max = 0;
+        }
+
+        if (0 < max) {
+            if (size2 <= max) {
+                len2 = size2;
+                max -= size2;
+            } else {
+                len2 = max;
+                max = 0;
+            }
+        } else {
+            len2 = 0;
+        }
+    } else {
+        len1 = size1;
+        len2 = size2;
+    }
+    
+    ret = SockTool::sendBuffers(fd, 
+        str1, len1, str2, len2);
+    if (0 < ret) {
+        if (len1 < ret) {
+            MsgTool::skipMsgPos(pMsg, len1);
+            
+            ret -= len1;
+            MsgTool::skipExtraPos(pMsg, ret);
+        } else {
+            MsgTool::skipMsgPos(pMsg, ret);
+        }
     }
 
     return ret;
@@ -921,11 +982,11 @@ int ManageCenter::addMsg(EnumDir enDir,
     
     switch (enDir) { 
     case ENUM_DIR_SENDER:
-        MsgUtil::addNodeMsg(&data->m_wr_msg_que, pMsg);
+        NodeUtil::queue(&data->m_wr_msg_que, pMsg);
         break;
 
     case ENUM_DIR_DEALER:
-        MsgUtil::addNodeMsg(&data->m_deal_msg_que, pMsg);
+        NodeUtil::queue(&data->m_deal_msg_que, pMsg);
         break;
         
     default:
@@ -956,7 +1017,7 @@ LList* ManageCenter::getWrPrivQue(GenData* data) const {
 }
 
 void ManageCenter::initSock(GenData* data) {
-    setIdleTimeout(data); 
+    setDefIdleTimeout(data); 
     
     setCb(ENUM_DIR_RECVER, data, ENUM_RD_SOCK);
     setStat(ENUM_DIR_RECVER, data, ENUM_STAT_INIT);

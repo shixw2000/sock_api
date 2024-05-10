@@ -7,6 +7,14 @@ class Lock;
 class TickTimer;
 class ISockBase;
 
+enum EnumTimerEvent {
+    ENUM_TIMER_EVENT_TIMEOUT = 100,
+    ENUM_TIMER_EVENT_CONN_TIMEOUT,
+    ENUM_TIMER_EVENT_FLOWCTL,
+
+    ENUM_TIMER_EVENT_END
+};
+
 class ManageCenter { 
 public:
     ManageCenter();
@@ -22,8 +30,8 @@ public:
     TimerObj* allocTimer();
     void freeTimer(TimerObj*);
 
-    bool chkExpire(EnumDir enDir, const GenData* data, unsigned now); 
-    bool updateExpire(EnumDir enDir, GenData* data, unsigned now);
+    bool updateExpire(EnumDir enDir, GenData* data,
+        unsigned now, bool force);
 
     void recordBytes(EnumDir enDir, GenData* data, 
         unsigned now, unsigned total);
@@ -59,11 +67,16 @@ public:
     
     /* unit: ticks */
     void setTimeout(unsigned rd_timeout, unsigned wr_timeout);
+
+    /* unit: ticks */
+    void setMaxRdTimeout(GenData* data, unsigned timeout);
+    void setMaxWrTimeout(GenData* data, unsigned timeout);
     
-    void setIdleTimeout(GenData* data);
-    void setConnTimeout(GenData* data);
+    void setDefIdleTimeout(GenData* data);
+    void setDefConnTimeout(GenData* data);
 
     void setAddr(GenData* data, const char szIP[], int port);
+    int getAddr(int fd, int* port, char ip[], int max);
 
     void lock();
     void unlock();
@@ -79,12 +92,14 @@ public:
     GenData* reg(int fd);
     void unreg(int fd); 
 
-    NodeCmd* creatCmdComm(EnumSockCmd cmd, int fd); 
-    NodeCmd* creatCmdSchedTask(unsigned delay,
+    NodeMsg* creatCmdComm(EnumSockCmd cmd, int fd); 
+    NodeMsg* creatCmdSchedTask(unsigned delay,
         unsigned interval, TimerFunc func,
         long data, long data2);
 
     int writeMsg(int fd, NodeMsg* pMsg, int max);
+    int writeExtraMsg(int fd, NodeMsg* pMsg, int max);
+    
     int recvMsg(GenData* data, int max);
     int addMsg(EnumDir enDir, GenData* data, NodeMsg* pMsg);
     void appendQue(EnumDir enDir, LList* to, GenData* data);
@@ -94,13 +109,13 @@ public:
     void delNode(EnumDir enDir, GenData* data);
     GenData* fromNode(EnumDir enDir, LList* node);
     
-    void addTimeout(EnumDir enDir, LList* root, GenData* data);
-    void delTimeout(EnumDir enDir, GenData* data);
-    GenData* fromTimeout(EnumDir enDir, LList* node);
-    
-    void flowctl(EnumDir enDir, TickTimer* timer, GenData* data);
-    void unflowctl(EnumDir enDir, GenData* data);
-    void setFlowctl(EnumDir enDir, GenData* data, TFunc func, long ptr);
+    void enableTimer(EnumDir enDir, TickTimer* timer, 
+        GenData* data, int event);
+    void cancelTimer(EnumDir enDir, GenData* data);
+    void setTimerParam(EnumDir enDir, GenData* data, 
+        TFunc func, long param1);
+
+    static GenData* fromTimeout(EnumDir enDir, TimerObj* obj);
 
     int onNewSock(GenData* parentData,
         GenData* childData, AccptOption& opt);

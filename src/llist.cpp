@@ -2,6 +2,7 @@
 #include<cstdlib>
 #include"shareheader.h"
 #include"llist.h"
+#include"cache.h"
 
 
 void initList(LList* list) {
@@ -131,7 +132,8 @@ void initQue(Queue* queue) {
 bool creatQue(Queue* queue, int cap) {
     ++cap;
     
-    queue->m_cache = (void**)calloc(cap, sizeof(void*));
+    queue->m_cache = (void**)CacheUtil::callocAlign(
+        cap, sizeof(void*));
     if (NULL != queue->m_cache) {
         queue->m_cap = cap; 
         queue->m_head = queue->m_tail = 0;
@@ -143,7 +145,7 @@ bool creatQue(Queue* queue, int cap) {
 
 void finishQue(Queue* queue) {
     if (NULL != queue->m_cache) {
-        free(queue->m_cache);
+        CacheUtil::freeAlign(queue->m_cache);
     }
 
     memset(queue, 0, sizeof(Queue));

@@ -35,7 +35,7 @@ public:
         TimerFunc func, long data, long data2);
     
     int sendCommCmd(EnumDir enDir, EnumSockCmd cmd, int fd); 
-    int sendCmd(EnumDir enDir, NodeCmd* pCmd);
+    int sendCmd(EnumDir enDir, NodeMsg* pCmd);
     int sendMsg(int fd, NodeMsg* pMsg);
     int dispatch(int fd, NodeMsg* pMsg); 
     
@@ -44,6 +44,7 @@ public:
     void notifyClose(GenData* data);
     void notifyClose(int fd);
      
+    int getAddr(int fd, int* pPort, char ip[], int max);
     long getExtra(int fd);
 
     void undelayRead(int fd);
@@ -58,6 +59,10 @@ public:
 
     /* seconds */
     void setTimeout(unsigned rd_timeout, unsigned wr_timeout);
+
+    /* seconds */
+    void setMaxRdTimeout(int fd, unsigned timeout);
+    void setMaxWrTimeout(int fd, unsigned timeout);
 
     void closeData(GenData* data);
     void activateSock(GenData* data, bool delay);

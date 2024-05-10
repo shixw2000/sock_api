@@ -3,7 +3,7 @@
 #include"shareheader.h" 
 
 
-struct NodeMsg; 
+struct NodeMsg;
 
 class ISockBase {
 public:

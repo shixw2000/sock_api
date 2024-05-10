@@ -2,13 +2,15 @@
 #include<cstdlib>
 #include"shareheader.h"
 #include"sender.h"
-#include"msgutil.h"
+#include"msgtool.h"
 #include"misc.h"
 #include"director.h"
 #include"managecenter.h"
 #include"ticktimer.h"
 #include"lock.h"
 #include"socktool.h"
+#include"cmdcache.h"
+#include"nodebase.h"
 
 
 bool Sender::sendSecCb(long data1, long, TimerObj*) {
@@ -17,6 +19,35 @@ bool Sender::sendSecCb(long data1, long, TimerObj*) {
     sender->cbTimer1Sec();
     return true;
 }
+
+bool Sender::sendTimeoutCb(long p1, 
+    long p2, TimerObj* obj) {
+    Sender* sender = (Sender*)p1;
+    int* pevent = (int*)p2;
+    GenData* data = NULL;
+    
+    data = ManageCenter::fromTimeout(ENUM_DIR_SENDER, obj);
+    
+    switch (*pevent) { 
+    case ENUM_TIMER_EVENT_TIMEOUT:
+        sender->dealTimeoutCb(data);
+        break;
+
+    case ENUM_TIMER_EVENT_CONN_TIMEOUT:
+        sender->dealConnCb(data);
+        break;
+
+    case ENUM_TIMER_EVENT_FLOWCTL:
+        sender->flowCtlCb(data);
+        break;
+
+    default:
+        break;
+    }
+    
+    return false;
+}
+
 
 Sender::PWrFunc Sender::m_func[ENUM_WR_END] = {
     &Sender::writeDefault,
@@ -35,12 +66,11 @@ Sender::Sender(ManageCenter* center, Director* director) {
     initList(&m_wait_queue);
     initList(&m_run_queue);
     initList(&m_cmd_queue);
-    initList(&m_time_flash_queue);
-    initList(&m_time_flash_conn);
     
     m_ev_fd[0] = m_ev_fd[1] = 0;
     m_busy = false;
     m_tick = 0;
+    m_now_sec = 0;
 }
 
 Sender::~Sender() {
@@ -57,7 +87,8 @@ int Sender::init() {
 
     m_lock = new SpinLock; 
 
-    m_pfds = (struct pollfd*)calloc(cap, sizeof(struct pollfd));
+    m_pfds = (struct pollfd*)CacheUtil::callocAlign(
+        cap, sizeof(struct pollfd));
     for (int i=0; i<cap; ++i) {
         m_pfds[i].events = POLLOUT;
     }  
@@ -86,7 +117,7 @@ void Sender::finish() {
     }
     
     if (NULL != m_pfds) {
-        free(m_pfds);
+        CacheUtil::freeAlign(m_pfds);
         m_pfds = NULL;
     }
 
@@ -274,11 +305,11 @@ int Sender::_activate(GenData* data, int stat) {
     return 0;
 }
 
-int Sender::addCmd(NodeCmd* pCmd) {
+int Sender::addCmd(NodeMsg* pCmd) {
     bool action = false;
     
     lock(); 
-    MsgUtil::addNodeCmd(&m_cmd_queue, pCmd);
+    NodeUtil::queue(&m_cmd_queue, pCmd);
     if (!m_busy) {
         m_busy = true;
         action = true;
@@ -311,7 +342,7 @@ int Sender::sendMsg(int fd, NodeMsg* pMsg) {
 
         return 0;
     } else {
-        MsgUtil::freeNodeMsg(pMsg);
+        NodeUtil::freeNode(pMsg);
         return -1;
     }
 }
@@ -348,79 +379,42 @@ void Sender::dealRunQue(LList* list) {
 }
 
 void Sender::cbTimer1Sec() {
-    unsigned now = m_timer->now();
-    
-    LOG_DEBUG("=======sender_now=%u|", now);
-    
-    /* every one second */
-    if (!isEmpty(&m_time_flash_queue)) {
-        dealFlashTimeout(now, &m_time_flash_queue);
-    }
-
-    /* checkk connect timeout */
-    if (!isEmpty(&m_time_flash_conn)) {
-        dealFlashConn(now, &m_time_flash_conn);
-    }
+    ++m_now_sec;
+    LOG_DEBUG("=======sender_now=%u|", m_now_sec);
 }
 
 void Sender::startTimer1Sec() {
     m_timer->schedule(m_1sec_obj, 0, DEF_NUM_PER_SEC);
 }
 
-void Sender::dealFlashConn(unsigned now, LList* list) { 
-    GenData* data = NULL;
-    LList* node = NULL;
-    LList* n = NULL;
-    bool expired = false;
+void Sender::dealConnCb(GenData* data) { 
+    detach(data, ENUM_STAT_TIMEOUT); 
 
-    for_each_list_safe(node, n, list) {
-        data = m_center->fromTimeout(ENUM_DIR_SENDER, node);
-
-        expired = m_center->chkExpire(ENUM_DIR_SENDER, data, now);
-        if (!expired) {
-            break;
-        } else {
-            detach(data, ENUM_STAT_TIMEOUT); 
-
-            /* connect timeout */
-            m_center->setConnRes(data, -2);
-            m_director->activate(ENUM_DIR_DEALER, data);
-        }
-    } 
+    /* connect timeout */
+    m_center->setConnRes(data, -2);
+    m_director->activate(ENUM_DIR_DEALER, data); 
 }
 
-void Sender::dealFlashTimeout(unsigned now, LList* list) { 
-    GenData* data = NULL;
-    LList* node = NULL;
-    LList* n = NULL;
-    bool expired = false;
+void Sender::dealTimeoutCb(GenData* data) { 
+    LOG_INFO("flash_timeout| fd=%d| msg=write close|", 
+        m_center->getFd(data));
 
-    for_each_list_safe(node, n, list) {
-        data = m_center->fromTimeout(ENUM_DIR_SENDER, node);
+    detach(data, ENUM_STAT_TIMEOUT); 
 
-        expired = m_center->chkExpire(ENUM_DIR_SENDER, data, now);
-        if (!expired) {
-            break;
-        } else {
-            LOG_INFO("flash_timeout| fd=%d| msg=write close|", 
-                m_center->getFd(data));
-        
-            detach(data, ENUM_STAT_TIMEOUT); 
-     
-            m_director->notifyClose(data);
-        }
-    } 
+    m_director->notifyClose(data); 
 }
 
-void Sender::addFlash(unsigned now, 
-    LList* list, GenData* data) {
+void Sender::addFlashTimeout(GenData* data,
+    int event, bool force) {
     bool action = false;
     
     /* timeout check */
-    action = m_center->updateExpire(ENUM_DIR_SENDER, data, now);
+    action = m_center->updateExpire(ENUM_DIR_SENDER, 
+        data, m_now_sec, force);
     if (action) {
-        m_center->delTimeout(ENUM_DIR_SENDER, data);
-        m_center->addTimeout(ENUM_DIR_SENDER, list, data);
+        m_center->cancelTimer(ENUM_DIR_SENDER, data);
+        m_center->enableTimer(ENUM_DIR_SENDER, m_timer, 
+            data, event);
     }
 }
 
@@ -459,7 +453,7 @@ void Sender::writeConnector(GenData* data) {
     setStat(data, ENUM_STAT_DISABLE);
 
     /* delete from timeout */
-    m_center->delTimeout(ENUM_DIR_SENDER, data);
+    m_center->cancelTimer(ENUM_DIR_SENDER, data);
     m_director->activate(ENUM_DIR_DEALER, data);
 }
 
@@ -510,16 +504,16 @@ void Sender::writeMsgQue(GenData* data,
     while (!isEmpty(queue)) { 
         if (NULL == node) {
             node = first(queue);
-            base = MsgUtil::toNodeMsg(node);
+            base = NodeUtil::toNode(node);
         }
         
-        ret = m_center->writeMsg(fd, base, max); 
-        if (MsgUtil::completedMsg(base)) {
+        ret = m_center->writeExtraMsg(fd, base, max); 
+        if (MsgTool::completedMsg(base)) {
             
             del(node);
             node = NULL;
             
-            MsgUtil::freeNodeMsg(base); 
+            NodeUtil::freeNode(base); 
         }
 
         if (0 < ret) { 
@@ -540,7 +534,8 @@ void Sender::writeMsgQue(GenData* data,
 
             m_center->recordBytes(ENUM_DIR_SENDER, 
                 data, now, total);
-            addFlash(now, &m_time_flash_queue, data);
+            
+            addFlashTimeout(data, ENUM_TIMER_EVENT_TIMEOUT);
         }
 
         if (0 < ret) {
@@ -564,41 +559,46 @@ void Sender::writeMsgQue(GenData* data,
     }
 }
 
-void Sender::flowCtlCallback(GenData* data) {
+void Sender::flowCtlCb(GenData* data) {
     LOG_DEBUG("<== end wr flowctl| fd=%d| now=%u|",
         m_center->getFd(data), m_timer->now());
 
     _activate(data, ENUM_STAT_FLOWCTL);
+
+    /* switch timeout */
+    addFlashTimeout(data, ENUM_TIMER_EVENT_TIMEOUT, true);
 }
 
 void Sender::flowCtl(GenData* data, unsigned total) { 
-    (void)total;
     LOG_DEBUG("==> begin wr flowctl| fd=%d| now=%u| total=%u|",
         m_center->getFd(data), m_timer->now(), total);
+
+    m_center->cancelTimer(ENUM_DIR_SENDER, data);
+    m_center->enableTimer(ENUM_DIR_SENDER, m_timer, 
+        data, ENUM_TIMER_EVENT_FLOWCTL);
     
     setStat(data, ENUM_STAT_FLOWCTL); 
-    m_center->flowctl(ENUM_DIR_SENDER, m_timer, data);
 }
 
 void Sender::dealCmds(LList* list) {
-    NodeCmd* base = NULL;
+    NodeMsg* base = NULL;
     LList* node = NULL;
     LList* n = NULL;
 
     for_each_list_safe(node, n, list) {
-        base = MsgUtil::toNodeCmd(node); 
+        base = NodeUtil::toNode(node); 
         del(node);
 
         procCmd(base);
-        MsgUtil::freeNodeCmd(base);
+        NodeUtil::freeNode(base);
     }
 }
 
-void Sender::procCmd(NodeCmd* base) { 
-    CmdHead_t* pHead = NULL;
+void Sender::procCmd(NodeMsg* base) { 
+    int cmd = 0;
 
-    pHead = MsgUtil::getCmd(base);
-    switch (pHead->m_cmd) { 
+    cmd = CmdUtil::getCmd(base);
+    switch (cmd) { 
     case ENUM_CMD_ADD_FD:
         cmdAddFd(base);
         break;
@@ -612,15 +612,14 @@ void Sender::procCmd(NodeCmd* base) {
     }
 }
 
-void Sender::cmdAddFd(NodeCmd* base) {
+void Sender::cmdAddFd(NodeMsg* base) {
     int fd = -1;
     int stat = 0;
     int cb = 0;
-    unsigned now = m_timer->now();
     CmdComm* pCmd = NULL;
     GenData* data = NULL;
 
-    pCmd = MsgUtil::getCmdBody<CmdComm>(base);
+    pCmd = CmdUtil::getCmdBody<CmdComm>(base);
     fd = pCmd->m_fd;
     
     if (exists(fd)) { 
@@ -636,10 +635,15 @@ void Sender::cmdAddFd(NodeCmd* base) {
             m_center->addNode(ENUM_DIR_SENDER, &m_wait_queue, data);
 
             if (ENUM_WR_SOCK == cb) {
-                addFlash(now, &m_time_flash_queue, data);
+                m_center->setTimerParam(ENUM_DIR_SENDER,
+                    data, &Sender::sendTimeoutCb, (long)this);
+                
+                addFlashTimeout(data, ENUM_TIMER_EVENT_TIMEOUT, true);
             } else if (ENUM_WR_Connector == cb) {
-                addFlash(now, &m_time_flash_conn, data);
-            } else {
+                m_center->setTimerParam(ENUM_DIR_SENDER,
+                    data, &Sender::sendTimeoutCb, (long)this);
+                
+                addFlashTimeout(data, ENUM_TIMER_EVENT_CONN_TIMEOUT, true);
             }
         }
     }
@@ -651,17 +655,16 @@ void Sender::detach(GenData* data, int stat) {
     m_center->delNode(ENUM_DIR_SENDER, data); 
     unlock();
 
-    m_center->delTimeout(ENUM_DIR_SENDER, data);
-    m_center->unflowctl(ENUM_DIR_SENDER, data);
+    m_center->cancelTimer(ENUM_DIR_SENDER, data);
 }
 
-void Sender::cmdRemoveFd(NodeCmd* base) { 
+void Sender::cmdRemoveFd(NodeMsg* base) { 
     int fd = -1;
     CmdComm* pCmd = NULL;
     GenData* data = NULL;
-    NodeCmd* refCmd = NULL;
+    NodeMsg* refCmd = NULL;
 
-    pCmd = MsgUtil::getCmdBody<CmdComm>(base);
+    pCmd = CmdUtil::getCmdBody<CmdComm>(base);
     fd = pCmd->m_fd;
 
     LOG_INFO("sender_remove_fd| fd=%d|", fd);
@@ -672,7 +675,7 @@ void Sender::cmdRemoveFd(NodeCmd* base) {
         detach(data, ENUM_STAT_INVALID);
         
         /* go to the third step of closing */
-        refCmd = MsgUtil::refNodeCmd(base);
+        refCmd = NodeUtil::refNode(base);
         m_director->sendCmd(ENUM_DIR_DEALER, refCmd);
     }
 }

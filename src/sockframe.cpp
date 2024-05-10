@@ -109,12 +109,29 @@ void SockFrame::setTimeout(unsigned rd_timeout,
     } 
 }
 
+void SockFrame::setMaxRdTimeout(int fd, unsigned timeout) {
+    if (chkValid()) {
+        m_intern->director.setMaxRdTimeout(fd, timeout);
+    }
+}
+
+void SockFrame::setMaxWrTimeout(int fd, unsigned timeout) {
+    if (chkValid()) {
+        m_intern->director.setMaxWrTimeout(fd, timeout);
+    }
+}
+
 long SockFrame::getExtra(int fd) {
     if (chkValid()) {
         return m_intern->director.getExtra(fd);
     } else {
         return 0;
     }
+}
+
+int SockFrame::getAddr(int fd, int* pPort, 
+    char ip[], int max) {
+    return m_intern->director.getAddr(fd, pPort, ip, max);
 }
 
 void SockFrame::getSpeed(int fd, unsigned& rd_thresh,

@@ -7,26 +7,10 @@
 #include"dealer.h"
 #include"misc.h"
 #include"misc.h"
-#include"msgutil.h"
+#include"msgtool.h"
 #include"ticktimer.h"
 #include"socktool.h"
 
-
-static bool readFlowctl(long arg, long arg2, TimerObj*) {
-    Receiver* receiver = (Receiver*)arg;
-    GenData* data = (GenData*)arg2;
-    
-    receiver->flowCtlCallback(data);
-    return false;
-}
-
-static bool writeFlowctl(long arg, long arg2, TimerObj*) {
-    Sender* sender = (Sender*)arg;
-    GenData* data = (GenData*)arg2;
-    
-    sender->flowCtlCallback(data);
-    return false;
-}
 
 Director::Director() {
     m_receiver = NULL;
@@ -104,7 +88,7 @@ void Director::stop() {
     m_dealer->stop();
 }
 
-int Director::sendCmd(EnumDir enDir, NodeCmd* pCmd) {
+int Director::sendCmd(EnumDir enDir, NodeMsg* pCmd) {
     int ret = 0;
     
     switch (enDir) {
@@ -190,7 +174,7 @@ int Director::notifyTimer(EnumDir enDir, unsigned tick) {
 int Director::sendCommCmd(EnumDir enDir, 
     EnumSockCmd cmd, int fd) {
     int ret = 0;
-    NodeCmd* pCmd = NULL; 
+    NodeMsg* pCmd = NULL; 
     
     pCmd = m_center->creatCmdComm(cmd, fd);
     ret = sendCmd(enDir, pCmd);
@@ -261,7 +245,7 @@ int Director::regCli(int fd, ISockCli* cli, long data2,
     if (NULL != data) { 
         m_center->setData(data, cli, data2);
         
-        m_center->setConnTimeout(data);
+        m_center->setDefConnTimeout(data);
         m_center->setAddr(data, szIP, port);
 
         /* just add fd for sener here */
@@ -280,6 +264,11 @@ int Director::regCli(int fd, ISockCli* cli, long data2,
 
     return ret;
 } 
+
+int Director::getAddr(int fd, int* pPort, 
+    char ip[], int max) {
+    return m_center->getAddr(fd, pPort, ip, max);
+}
 
 long Director::getExtra(int fd) {
     GenData* data = NULL;
@@ -323,6 +312,28 @@ void Director::setSpeed(int fd,
     }
 } 
 
+void Director::setMaxRdTimeout(int fd, unsigned timeout) {
+    GenData* data = NULL;
+
+    if (m_center->exists(fd)) {
+        data = m_center->find(fd);
+
+        m_center->setMaxRdTimeout(data,
+            timeout * DEF_NUM_PER_SEC);
+    }
+}
+
+void Director::setMaxWrTimeout(int fd, unsigned timeout) {
+    GenData* data = NULL;
+
+    if (m_center->exists(fd)) {
+        data = m_center->find(fd);
+
+        m_center->setMaxWrTimeout(data,
+            timeout * DEF_NUM_PER_SEC);
+    }
+}
+
 void Director::closeData(GenData* data) {
     int fd = m_center->getFd(data);
     
@@ -333,7 +344,7 @@ void Director::closeData(GenData* data) {
 int Director::schedule(unsigned delay, unsigned interval,
     TimerFunc func, long data, long data2) {
     int ret = 0;
-    NodeCmd* pCmd = NULL; 
+    NodeMsg* pCmd = NULL; 
     
     /* convert from sec to ticks*/
     delay *= DEF_NUM_PER_SEC;
@@ -359,12 +370,12 @@ struct TaskData {
 static TaskData* allocTask() {
     TaskData* data = NULL;
     
-    data = (TaskData*)calloc(1, sizeof(TaskData));
+    data = (TaskData*)CacheUtil::callocAlign(1, sizeof(TaskData));
     return data;
 }
 
 static void freeTask(TaskData* data) {
-    free(data);
+    CacheUtil::freeAlign(data);
 }
 
 static bool _creatCli(long arg, long arg2) {
@@ -472,12 +483,6 @@ void Director::undelayRead(int fd) {
 
 void Director::activateSock(GenData* data, bool delay) {
     int fd = m_center->getFd(data); 
-  
-    m_center->setFlowctl(ENUM_DIR_RECVER, data, 
-        readFlowctl, (long)m_receiver);
-    
-    m_center->setFlowctl(ENUM_DIR_SENDER, data, 
-        writeFlowctl, (long)m_sender);
     
     activate(ENUM_DIR_DEALER, data);
     sendCommCmd(ENUM_DIR_SENDER, ENUM_CMD_ADD_FD, fd);

@@ -256,7 +256,8 @@ void GenSvr::stop() {
 }
 
 SockBuffer* GenSvr::allocBuffer() {
-    SockBuffer* buffer = (SockBuffer*)calloc(1, sizeof(SockBuffer));
+    SockBuffer* buffer = (SockBuffer*)CacheUtil::callocAlign(
+        1, sizeof(SockBuffer));
 
     return buffer;
 }
@@ -268,7 +269,7 @@ void GenSvr::freeBuffer(SockBuffer* buffer) {
             buffer->m_msg = NULL;
         }
         
-        free(buffer);
+        CacheUtil::freeAlign(buffer);
     }
 }
 
