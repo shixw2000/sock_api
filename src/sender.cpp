@@ -11,6 +11,7 @@
 #include"socktool.h"
 #include"cmdcache.h"
 #include"nodebase.h"
+#include"cache.h"
 
 
 bool Sender::sendSecCb(long data1, long, TimerObj*) {
@@ -21,30 +22,11 @@ bool Sender::sendSecCb(long data1, long, TimerObj*) {
 }
 
 bool Sender::sendTimeoutCb(long p1, 
-    long p2, TimerObj* obj) {
+    long p2, TimerObj*) {
     Sender* sender = (Sender*)p1;
-    int* pevent = (int*)p2;
-    GenData* data = NULL;
-    
-    data = ManageCenter::fromTimeout(ENUM_DIR_SENDER, obj);
-    
-    switch (*pevent) { 
-    case ENUM_TIMER_EVENT_TIMEOUT:
-        sender->dealTimeoutCb(data);
-        break;
+    GenData* data = (GenData*)p2;
 
-    case ENUM_TIMER_EVENT_CONN_TIMEOUT:
-        sender->dealConnCb(data);
-        break;
-
-    case ENUM_TIMER_EVENT_FLOWCTL:
-        sender->flowCtlCb(data);
-        break;
-
-    default:
-        break;
-    }
-    
+    sender->dealTimeoutCb(data); 
     return false;
 }
 
@@ -53,6 +35,7 @@ Sender::PWrFunc Sender::m_func[ENUM_WR_END] = {
     &Sender::writeDefault,
     &Sender::writeSock,
     &Sender::writeConnector,
+    &Sender::writeUdp,
 };
 
 Sender::Sender(ManageCenter* center, Director* director) {
@@ -65,6 +48,7 @@ Sender::Sender(ManageCenter* center, Director* director) {
 
     initList(&m_wait_queue);
     initList(&m_run_queue);
+    initList(&m_priv_run_queue);
     initList(&m_cmd_queue);
     
     m_ev_fd[0] = m_ev_fd[1] = 0;
@@ -147,19 +131,20 @@ void Sender::run() {
     }
 }
 
-void Sender::doTasks() {
-    wait(); 
-    consume(); 
+void Sender::doTasks() { 
+    LList runlist = INIT_LIST(runlist);
+    
+    wait(&runlist); 
+    consume(&runlist); 
 } 
 
-void Sender::consume() {
-    unsigned tick = 0;
-    LList runlist = INIT_LIST(runlist);
+void Sender::consume(LList* runlist) {
     LList cmdlist = INIT_LIST(cmdlist);
+    unsigned tick = 0; 
 
     lock();
     if (!isEmpty(&m_run_queue)) {
-        append(&runlist, &m_run_queue);
+        append(runlist, &m_run_queue);
     }
 
     if (!isEmpty(&m_cmd_queue)) {
@@ -175,9 +160,13 @@ void Sender::consume() {
         m_busy = false;
     }
     unlock();
+
+    if (!isEmpty(&m_priv_run_queue)) {
+        append(runlist, &m_priv_run_queue);
+    }
     
-    if (!isEmpty(&runlist)) { 
-        dealRunQue(&runlist);
+    if (!isEmpty(runlist)) { 
+        dealRunQue(runlist);
     } 
 
     if (0 < tick) {
@@ -189,20 +178,25 @@ void Sender::consume() {
     } 
 }
 
-bool Sender::wait() {
+bool Sender::wait(LList* runlist) {
     GenData* data = NULL;
     LList* node = NULL;
     int timeout = DEF_POLL_TIME_MSEC;
     int size = 0;
-    int cnt = 0;
+    int cnt = 0; 
 
+    /* position 0 is event */
     size = 1;
     for_each_list(node, &m_wait_queue) {
         data = m_center->fromNode(ENUM_DIR_SENDER, node);
         m_pfds[size++].fd = m_center->getFd(data);
     }
 
-    cnt = poll(m_pfds, size, timeout);
+    if (m_busy) {
+        timeout = 0;
+    }
+
+    cnt = poll(m_pfds, size, timeout); 
     if (0 == cnt) {
         /* empty */
         return false;
@@ -216,12 +210,12 @@ bool Sender::wait() {
             --cnt;
         }
 
-        for (int i=1; i<size && 0 < cnt; ++i) {
+        for (int i=MIN_SND_PFD; i<size && 0 < cnt; ++i) {
             if (0 != m_pfds[i].revents) { 
                 data = find(m_pfds[i].fd); 
                     
                 /* move from wait queue to run queue */
-                queue(data);
+                toWrite(runlist, data);
                 
                 /* reset the flag */
                 m_pfds[i].revents = 0;
@@ -270,18 +264,16 @@ bool Sender::_queue(GenData* data, int expectStat) {
     return action;
 }
 
-bool Sender::queue(GenData* data) {
-    bool action = false;
-    
+void Sender::toWrite(LList* runlist, GenData* data) {
     /* delete from wait queue, no need lock */
+    setStat(data, ENUM_STAT_READY);
     m_center->delNode(ENUM_DIR_SENDER, data);
 
     /* add to run queue */
-    lock();
-    action = _queue(data, ENUM_STAT_BLOCKING);
-    unlock();
-    
-    return action;
+    m_center->addNode(ENUM_DIR_SENDER, runlist, data); 
+    if (!m_busy) {
+        m_busy = true;
+    }
 }
 
 int Sender::activate(GenData* data) {
@@ -329,18 +321,24 @@ int Sender::sendMsg(int fd, NodeMsg* pMsg) {
 
     LOG_DEBUG("fd=%d| msg=send msg|", fd);
 
-    data = find(fd); 
-    if (!m_center->isClosed(data)) {
-        lock(); 
-        m_center->addMsg(ENUM_DIR_SENDER, data, pMsg);
-        action = _queue(data, ENUM_STAT_IDLE); 
-        unlock();
+    if (exists(fd)) {
+        data = find(fd); 
+        
+        if (!m_center->isClosed(data)) {
+            lock(); 
+            m_center->addMsg(ENUM_DIR_SENDER, data, pMsg);
+            action = _queue(data, ENUM_STAT_IDLE); 
+            unlock();
 
-        if (action) {
-            signal();
+            if (action) {
+                signal();
+            }
+
+            return 0;
+        } else {
+            NodeUtil::freeNode(pMsg);
+            return -1;
         }
-
-        return 0;
     } else {
         NodeUtil::freeNode(pMsg);
         return -1;
@@ -396,12 +394,29 @@ void Sender::dealConnCb(GenData* data) {
 }
 
 void Sender::dealTimeoutCb(GenData* data) { 
-    LOG_INFO("flash_timeout| fd=%d| msg=write close|", 
-        m_center->getFd(data));
+    int event = 0;
 
-    detach(data, ENUM_STAT_TIMEOUT); 
+    event = ManageCenter::getEvent(ENUM_DIR_SENDER, data);
+    switch (event) { 
+    case ENUM_TIMER_EVENT_TIMEOUT:
+        LOG_INFO("flash_timeout| fd=%d| msg=write close|", 
+            m_center->getFd(data));
 
-    m_director->notifyClose(data); 
+        detach(data, ENUM_STAT_TIMEOUT); 
+        m_director->notifyClose(data);
+        break;
+
+    case ENUM_TIMER_EVENT_CONN_TIMEOUT:
+        dealConnCb(data);
+        break;
+
+    case ENUM_TIMER_EVENT_FLOWCTL:
+        flowCtlCb(data);
+        break;
+
+    default:
+        break;
+    } 
 }
 
 void Sender::addFlashTimeout(GenData* data,
@@ -450,7 +465,7 @@ void Sender::writeConnector(GenData* data) {
         m_center->setConnRes(data, -1);
     } 
 
-    setStat(data, ENUM_STAT_DISABLE);
+    setStat(data, ENUM_STAT_INVALID);
 
     /* delete from timeout */
     m_center->cancelTimer(ENUM_DIR_SENDER, data);
@@ -458,14 +473,17 @@ void Sender::writeConnector(GenData* data) {
 }
 
 void Sender::writeSock(GenData* data) {
+    LList* wrQue = NULL;
+    int fd = m_center->getFd(data);
     unsigned now = m_timer->now();
+    EnumSockRet ret = ENUM_SOCK_RET_OK;
     unsigned max = 0;
-    LList* list = NULL;
     unsigned threshold = 0;
+    int total = 0; 
 
     m_center->clearBytes(ENUM_DIR_SENDER, data, now);
-    threshold = m_center->getWrThresh(data); 
     
+    threshold = m_center->getWrThresh(data); 
     if (0 < threshold) { 
         max = m_center->calcThresh(ENUM_DIR_SENDER, data, now);
         if (0 == max) {
@@ -475,61 +493,19 @@ void Sender::writeSock(GenData* data) {
     } else {
         max = 0;
     } 
-
-    list = m_center->getWrPrivQue(data);
-    if (isEmpty(list)) {
-        lock();
-        m_center->appendQue(ENUM_DIR_SENDER, list, data);
-        if (isEmpty(list)) {
-            setStat(data, ENUM_STAT_IDLE);
-        }
-        unlock();
-
-        if (isEmpty(list)) {
-            return;
-        } 
-    }
-
-    writeMsgQue(data, list, now, max);
-}
-
-void Sender::writeMsgQue(GenData* data, 
-    LList* queue, unsigned now, unsigned max) {
-    int fd = m_center->getFd(data);
-    int ret = 0;
-    unsigned total = 0;
-    LList* node = NULL;
-    NodeMsg* base = NULL; 
     
-    while (!isEmpty(queue)) { 
-        if (NULL == node) {
-            node = first(queue);
-            base = NodeUtil::toNode(node);
-        }
-        
-        ret = m_center->writeExtraMsg(fd, base, max); 
-        if (MsgTool::completedMsg(base)) {
-            
-            del(node);
-            node = NULL;
-            
-            NodeUtil::freeNode(base); 
-        }
-
-        if (0 < ret) { 
-            total += ret;
-            if (0 < max && total >= max) {
-                break;
-            }
-        } else {
-            break;
-        }
+    lock();
+    wrQue = m_center->getWrQue(data);
+    if (isEmpty(wrQue)) {
+        setStat(data, ENUM_STAT_IDLE);
     }
+    unlock();
 
-    if (0 <= ret) {
+    if (!isEmpty(wrQue)) {
+        ret = sendTcp(fd, wrQue, max, &total);
         if (0 < total) {
             LOG_DEBUG("write_sock| fd=%d| ret=%d|"
-                " max=%u| total=%u|",
+                " max=%u| total=%d|",
                 fd, ret, max, total);
 
             m_center->recordBytes(ENUM_DIR_SENDER, 
@@ -538,24 +514,63 @@ void Sender::writeMsgQue(GenData* data,
             addFlashTimeout(data, ENUM_TIMER_EVENT_TIMEOUT);
         }
 
-        if (0 < ret) {
-            if (isEmpty(queue)) {
-                _activate(data, ENUM_STAT_READY);
-            } else {
-                flowCtl(data, total);
-            }
-        } else {
+        if (ENUM_SOCK_RET_OK == ret) { 
+            /* for next run loop */
+            m_center->addNode(ENUM_DIR_SENDER, 
+                &m_priv_run_queue, data); 
+            if (!m_busy) {
+                m_busy = true;
+            } 
+        } else if (ENUM_SOCK_RET_BLOCK == ret) { 
             setStat(data, ENUM_STAT_BLOCKING);
-            m_center->addNode(ENUM_DIR_SENDER, &m_wait_queue, data); 
+            m_center->addNode(ENUM_DIR_SENDER, &m_wait_queue, data);
+        } else { 
+            detach(data, ENUM_STAT_ERROR); 
+            m_director->notifyClose(data);
         }
-    } else {
-        LOG_INFO("write_sock| fd=%d| ret=%d|"
-            " max=%u| total=%u| msg=close|",
-            fd, ret, max, total);
-        
-        detach(data, ENUM_STAT_ERROR);
+    }
+}
+
+void Sender::writeUdp(GenData* data) {
+    LList* wrQue = NULL;
+    EnumSockRet ret = ENUM_SOCK_RET_OK;
+    unsigned now = m_timer->now();
+    int fd = m_center->getFd(data);
+    int total = 0;
+    int max = 0;
     
-        m_director->notifyClose(data);
+    lock();
+    wrQue = m_center->getWrQue(data);
+    if (isEmpty(wrQue)) {
+        setStat(data, ENUM_STAT_IDLE);
+    }
+    unlock();
+
+    if (!isEmpty(wrQue)) {
+        ret = sendUdp(fd, wrQue, max, &total);
+        if (0 < total) {
+            LOG_DEBUG("write_udp| fd=%d| ret=%d|"
+                " total=%d|",
+                fd, ret, total);
+
+            m_center->recordBytes(ENUM_DIR_SENDER, 
+                data, now, total);
+        }
+        
+        if (ENUM_SOCK_RET_OK == ret) { 
+            /* for next run loop */
+            m_center->addNode(ENUM_DIR_SENDER, 
+                &m_priv_run_queue, data); 
+            if (!m_busy) {
+                m_busy = true;
+            } 
+        } else if (ENUM_SOCK_RET_BLOCK == ret) { 
+            setStat(data, ENUM_STAT_BLOCKING);
+            m_center->addNode(ENUM_DIR_SENDER, &m_wait_queue, data);
+        } else { 
+            detach(data, ENUM_STAT_ERROR); 
+            m_director->notifyClose(data);
+        }
     }
 }
 
@@ -574,8 +589,9 @@ void Sender::flowCtl(GenData* data, unsigned total) {
         m_center->getFd(data), m_timer->now(), total);
 
     m_center->cancelTimer(ENUM_DIR_SENDER, data);
-    m_center->enableTimer(ENUM_DIR_SENDER, m_timer, 
-        data, ENUM_TIMER_EVENT_FLOWCTL);
+    m_center->enableTimer(ENUM_DIR_SENDER, m_timer, data,
+        ENUM_TIMER_EVENT_FLOWCTL,
+        DEF_FLOWCTL_TICK_NUM);
     
     setStat(data, ENUM_STAT_FLOWCTL); 
 }
@@ -628,21 +644,17 @@ void Sender::cmdAddFd(NodeMsg* base) {
         cb = m_center->getCb(ENUM_DIR_SENDER, data);
         stat = m_center->getStat(ENUM_DIR_SENDER, data);
 
-        if(ENUM_STAT_INIT == stat) {
+        assert(ENUM_STAT_INVALID == stat);
+        
+        if(ENUM_STAT_INVALID == stat) {
             setStat(data, ENUM_STAT_BLOCKING);
             
             /* first to wait for write */
             m_center->addNode(ENUM_DIR_SENDER, &m_wait_queue, data);
 
-            if (ENUM_WR_SOCK == cb) {
-                m_center->setTimerParam(ENUM_DIR_SENDER,
-                    data, &Sender::sendTimeoutCb, (long)this);
-                
+            if (ENUM_WR_SOCK == cb) { 
                 addFlashTimeout(data, ENUM_TIMER_EVENT_TIMEOUT, true);
-            } else if (ENUM_WR_Connector == cb) {
-                m_center->setTimerParam(ENUM_DIR_SENDER,
-                    data, &Sender::sendTimeoutCb, (long)this);
-                
+            } else if (ENUM_WR_Connector == cb) { 
                 addFlashTimeout(data, ENUM_TIMER_EVENT_CONN_TIMEOUT, true);
             }
         }
@@ -666,12 +678,13 @@ void Sender::cmdRemoveFd(NodeMsg* base) {
 
     pCmd = CmdUtil::getCmdBody<CmdComm>(base);
     fd = pCmd->m_fd;
-
-    LOG_INFO("sender_remove_fd| fd=%d|", fd);
     
+    LOG_DEBUG("sender_remove_fd| fd=%d|", fd);
+    
+    assert(exists(fd));
     if (exists(fd)) { 
-        data = find(fd);
-
+        
+        data = find(fd); 
         detach(data, ENUM_STAT_INVALID);
         
         /* go to the third step of closing */
@@ -682,5 +695,213 @@ void Sender::cmdRemoveFd(NodeMsg* base) {
 
 bool Sender::exists(int fd) const {
     return m_center->exists(fd);
+}
+
+EnumSockRet Sender::sendTcp(int fd,
+    LList* list, int max, int* pwrLen) {
+    EnumSockRet ret = ENUM_SOCK_RET_OK;
+    int sndlen = 0;
+    int total = 0;
+    int cnt = 0;
+    struct iovec iov[MAX_IOVEC_SIZE];
+    
+    if (!(0 < max) || max > MAX_SIZE_ONCE_RDWR) {
+        max = MAX_SIZE_ONCE_RDWR;
+    }
+
+    while (!isEmpty(list) && 0 < max &&
+        ENUM_SOCK_RET_OK == ret) { 
+        cnt = prepareQue(list, iov, MAX_IOVEC_SIZE, max);
+
+        ret = SockTool::sendVecUntil(fd, iov, cnt, &sndlen, NULL);
+        if (0 < sndlen) {
+            total += sndlen;
+            max -= sndlen;
+
+            purgeQue(list, sndlen);
+        }
+    }
+
+    if (NULL != pwrLen) {
+        *pwrLen = total;
+    }
+    
+    return ret;
+}
+
+EnumSockRet Sender::sendUdp(int fd,
+    LList* list, int max, int* pwrLen) {
+    const SockAddr* preh = NULL;
+    LList* node = NULL;
+    NodeMsg* pMsg = NULL;
+    EnumSockRet ret = ENUM_SOCK_RET_OK;
+    int sndlen = 0;
+    int total = 0;
+    int cnt = 0;
+    int size = 0;
+    bool done = false;
+    struct iovec iov[2];
+
+    if (!(0 < max) || max > MAX_SIZE_ONCE_RDWR) {
+        max = MAX_SIZE_ONCE_RDWR;
+    }
+    
+    while (!isEmpty(list) && total < max &&
+        ENUM_SOCK_RET_OK == ret) { 
+        node = first(list);
+        pMsg = NodeUtil::toNode(node);
+
+        preh = MsgTool::getUdpAddr(pMsg);
+        if (NULL != preh) {
+            size = MAX_SIZE_ONCE_RDWR;
+            cnt = prepareMsg(pMsg, iov, 2, &size);
+
+            ret = SockTool::sendVec(fd, iov, cnt, &sndlen, preh);
+            if (0 < sndlen) {
+                total += sndlen;
+
+                done = purgeMsg(pMsg, &sndlen);
+                if (done) {
+                    del(node);
+                    NodeUtil::freeNode(pMsg); 
+                } else {
+                    /* invalid: udp must send as whole */
+                    ret = ENUM_SOCK_RET_OTHER;
+                }
+            }
+        } else {
+            ret = ENUM_SOCK_RET_OTHER;
+        }
+    }
+
+    if (NULL != pwrLen) {
+        *pwrLen = total;
+    }
+    
+    return ret;
+}
+
+int Sender::prepareQue(LList* list, 
+    struct iovec* iov, int size, int max) {
+    LList* node = NULL;
+    NodeMsg* pMsg = NULL;
+    int cnt = 0;
+    int totalCnt = 0;
+
+    for_each_list(node, list) { 
+        if (0 < size && 0 < max) {
+            pMsg = NodeUtil::toNode(node);
+            
+            cnt = prepareMsg(pMsg, iov, size, &max);
+            if (0 < cnt) {
+                totalCnt += cnt;
+                iov += cnt;
+                size -= cnt;
+            }
+        } else {
+            break;
+        }
+    }
+
+    return totalCnt;
+}
+
+int Sender::purgeQue(LList* list, int max) {
+    LList* node = NULL;
+    LList* n = NULL;
+    NodeMsg* pMsg = NULL;
+    bool done = false;
+    int cnt = 0;
+    
+    for_each_list_safe(node, n, list) {
+        pMsg = NodeUtil::toNode(node);
+
+        done = purgeMsg(pMsg, &max);
+        if (done) {
+            del(node);
+            NodeUtil::freeNode(pMsg); 
+            ++cnt;
+        } else {
+            break;
+        }
+    }
+
+    return cnt;
+}
+
+int Sender::prepareMsg(NodeMsg* pMsg,
+    struct iovec* iov, int size, int* pmax) {
+    char* psz = NULL;
+    int left = 0;
+    int pos = 0;
+    int len = 0;
+    int cnt = 0;
+
+    if (cnt < size && 0 < *pmax) {
+        left = MsgTool::getLeft(pMsg);
+        if (0 < left) {
+            pos = MsgTool::getMsgPos(pMsg);
+            psz = MsgTool::getMsg(pMsg);
+            len = left < *pmax ? left : *pmax; 
+                
+            iov[cnt].iov_base = psz + pos;
+            iov[cnt].iov_len = len;
+            
+            ++cnt;
+            *pmax -= len;
+        }
+
+        if (cnt < size && 0 < *pmax) {
+            left = MsgTool::getExtraLeft(pMsg);
+            if (0 < left) {
+                pos = MsgTool::getExtraPos(pMsg);
+                psz = MsgTool::getExtraMsg(pMsg);
+
+                len = *pmax > left ? left : *pmax;
+
+                iov[cnt].iov_base = psz + pos;
+                iov[cnt].iov_len = len;
+
+                ++cnt;
+                *pmax -= len;
+            }
+        }
+    } 
+    
+    return cnt;
+}
+
+bool Sender::purgeMsg(NodeMsg* pMsg, int* pmax) {
+    int left = 0; 
+
+    left = MsgTool::getLeft(pMsg);
+    if (0 < left) {
+        if (left <= *pmax) {
+            MsgTool::skipMsgPos(pMsg, left);
+            *pmax -= left;
+        } else {
+            MsgTool::skipMsgPos(pMsg, *pmax);
+            *pmax = 0;
+            
+            return false;
+        }
+    }
+    
+    left = MsgTool::getExtraLeft(pMsg);
+    if (0 < left) {
+        if (left <= *pmax) {
+            MsgTool::skipExtraPos(pMsg, left); 
+            *pmax -= left;
+
+            return true;
+        } else {
+            MsgTool::skipExtraPos(pMsg, *pmax);
+            *pmax = 0;
+
+            return false;
+        }
+    } else {
+        return true;
+    }
 }
 

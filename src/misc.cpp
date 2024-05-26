@@ -2,6 +2,7 @@
 #include<cstdio>
 #include<cstring>
 #include<sys/time.h>
+#include<sys/resource.h>
 #include<time.h>
 #include<stdarg.h>
 #include<cstdlib>
@@ -197,7 +198,7 @@ int MiscTool::mkDir(const char dir[]) {
 void MiscTool::armSig(int sig, PFunSig fn) {
     struct sigaction act;
 
-    memset(&act, 0, sizeof(act));
+    MiscTool::bzero(&act, sizeof(act));
     sigemptyset(&act.sa_mask);
 
     act.sa_flags = SA_RESTART;
@@ -326,7 +327,7 @@ int MiscTool::creatTimer(int ms) {
 int MiscTool::creatPipes(int (*pfds)[2]) {
     int ret = 0;
 
-    memset(pfds, 0, sizeof(*pfds));
+    MiscTool::bzero(pfds, sizeof(*pfds));
     ret = pipe(*pfds);
     if (0 == ret) {
         fcntl((*pfds)[0], F_SETFL, O_NONBLOCK);
@@ -357,8 +358,152 @@ void MiscTool::getRand(void* buf, int len) {
             r = (len & 0x3);
             if (0 < r) {
                 n = rand();
-                memcpy(pn, &n, r);
+                MiscTool::bcopy(pn, &n, r);
             }
         } 
     }
 } 
+
+void MiscTool::sleepSec(int sec) {
+    sleep(sec);
+}
+
+void MiscTool::bzero(void* dst, int size) {
+    if (0 < size) {
+        memset(dst, 0, size);
+    }
+}
+
+void MiscTool::bcopy(void* dst,
+    const void* src, int size) {
+    if (0 < size) {
+        memcpy(dst, src, size);
+    }
+}
+
+int MiscTool::strLen(const char* src, int max) {
+    int len = 0;
+
+    if (NULL != src) {
+        len = (int)strnlen(src, max);
+    }
+    
+    return len;
+}
+
+int MiscTool::strCpy(void* dst, const char* src, int max) {
+    char* psz = (char*)dst;
+    int len = 0;
+
+    if (0 < max) {
+        len = strLen(src, max-1);
+        if (0 < len) {
+            memcpy(dst, src, len);
+            psz[len] = '\0';
+        } else {
+            psz[len] = '\0';
+        }
+    }
+
+    return len;
+}
+
+int MiscTool::strPrint(void* dst, int max, const char format[], ...) {
+    char* psz = (char*)dst;
+    va_list ap;
+    int len = 0;
+
+    if (0 < max) {
+        va_start(ap, format);
+        len = vsnprintf(psz, max, format, ap);
+        va_end(ap);
+        if (0 < len && len < max) {
+            /* ok */
+        } else if (len >= max) {
+            len = max - 1; 
+        } else {
+            len = 0;
+        }
+
+        psz[len] = '\0';
+    }
+
+    return len;
+}
+
+static const int DEF_SYS_RES[ENUM_RES_END] = {
+    RLIMIT_CORE,
+    RLIMIT_CPU,
+    RLIMIT_DATA,
+    RLIMIT_FSIZE,
+    RLIMIT_MSGQUEUE,
+    RLIMIT_NOFILE,
+    RLIMIT_NPROC,
+    RLIMIT_RSS,
+    RLIMIT_SIGPENDING,
+    RLIMIT_STACK,
+};
+
+int MiscTool::setRlimit(EnumResType type, 
+    const unsigned long* softV, 
+    const unsigned long* hardV) {
+    int ret = 0;
+    struct rlimit rlim;
+
+    bzero(&rlim, sizeof(rlim));
+    
+    if (NULL != softV) {
+        rlim.rlim_cur = *softV;
+    }
+
+    if (NULL != hardV) {
+        rlim.rlim_max = *hardV;
+    }
+    
+    ret = setrlimit(DEF_SYS_RES[type], &rlim);
+    if (0 == ret) {
+        LOG_INFO("set_rlimit| type=%d| softv=%lu|"
+            " hardv=%lu| msg=ok|",
+            type, rlim.rlim_cur, 
+            rlim.rlim_max);
+    } else {
+        LOG_WARN("set_rlimit| type=%d| softv=%lu|"
+            " hardv=%lu| error=%d:%s|",
+            type, rlim.rlim_cur, 
+            rlim.rlim_max,
+            errno, strerror(errno));
+        ret = -1;
+    }
+    
+    return ret;
+}
+
+int MiscTool::getRlimit(EnumResType type, 
+    unsigned long* softV, unsigned long* hardV) {
+    int ret = 0;
+    struct rlimit rlim;
+
+    bzero(&rlim, sizeof(rlim));
+    ret = getrlimit(DEF_SYS_RES[type], &rlim);
+    if (0 == ret) {
+        LOG_INFO("get_rlimit| type=%d| softv=%lu|"
+            " hardv=%lu| msg=ok|",
+            type, rlim.rlim_cur, 
+            rlim.rlim_max);
+    } else {
+        LOG_WARN("get_rlimit| type=%d| error=%d:%s|",
+            type, errno, strerror(errno));
+        ret = -1;
+    }
+
+    if (NULL != softV) {
+        *softV = rlim.rlim_cur;
+    }
+
+    if (NULL != hardV) {
+        *hardV = rlim.rlim_max;
+    }
+
+    return ret;
+}
+

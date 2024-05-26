@@ -1,9 +1,7 @@
 #ifndef __MSGTOOL_H__
 #define __MSGTOOL_H__
-#include"cache.h"
+#include"shareheader.h"
 
-
-struct NodeMsg;
 
 class MsgTool {
 public: 
@@ -55,6 +53,12 @@ public:
 
     static int getLeft(NodeMsg* pb);
     static int getExtraLeft(NodeMsg* pb);
+
+    static NodeMsg* allocUdpMsg(int size);
+    static NodeMsg* refUdpMsg(NodeMsg* msg);
+
+    static int setUdpAddr(NodeMsg* msg, const SockAddr& addr);
+    static const SockAddr* getUdpAddr(NodeMsg* msg);
 
 private:
     static char* getPreNode(NodeMsg* pb, int preLen); 

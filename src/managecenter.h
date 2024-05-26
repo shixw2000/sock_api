@@ -1,6 +1,7 @@
 #ifndef __MANAGECENTER_H__
 #define __MANAGECENTER_H__
 #include"sockdata.h"
+#include"socktool.h"
 
 
 class Lock;
@@ -11,13 +12,14 @@ enum EnumTimerEvent {
     ENUM_TIMER_EVENT_TIMEOUT = 100,
     ENUM_TIMER_EVENT_CONN_TIMEOUT,
     ENUM_TIMER_EVENT_FLOWCTL,
+    ENUM_TIMER_EVENT_LISTENER_SLEEP,
 
     ENUM_TIMER_EVENT_END
 };
 
 class ManageCenter { 
 public:
-    ManageCenter();
+    explicit ManageCenter(int cap);
     ~ManageCenter();
 
     int init();
@@ -88,45 +90,41 @@ public:
     bool markClosed(GenData* data);
     bool markClosed(int fd);
 
-    void setData(GenData* data, ISockBase* sock, long extra);
-    GenData* reg(int fd);
-    void unreg(int fd); 
-
-    NodeMsg* creatCmdComm(EnumSockCmd cmd, int fd); 
-    NodeMsg* creatCmdSchedTask(unsigned delay,
-        unsigned interval, TimerFunc func,
-        long data, long data2);
-
-    int writeMsg(int fd, NodeMsg* pMsg, int max);
-    int writeExtraMsg(int fd, NodeMsg* pMsg, int max);
+    void setData(GenData* data, ISockBase* sock, long extra); 
     
-    int recvMsg(GenData* data, int max);
+    GenData* reg(int fd);
+    bool unreg(GenData* data);
+
     int addMsg(EnumDir enDir, GenData* data, NodeMsg* pMsg);
-    void appendQue(EnumDir enDir, LList* to, GenData* data);
-    LList* getWrPrivQue(GenData* data) const;
+    
+    LList* getWrQue(GenData* data);
+
+    LList* getDealQue(GenData* data);
 
     void addNode(EnumDir enDir, LList* root, GenData* data);
     void delNode(EnumDir enDir, GenData* data);
     GenData* fromNode(EnumDir enDir, LList* node);
     
     void enableTimer(EnumDir enDir, TickTimer* timer, 
-        GenData* data, int event);
+        GenData* data, int event, unsigned delay = 0);
+    
     void cancelTimer(EnumDir enDir, GenData* data);
     void setTimerParam(EnumDir enDir, GenData* data, 
         TFunc func, long param1);
 
-    static GenData* fromTimeout(EnumDir enDir, TimerObj* obj);
+    static int getEvent(EnumDir enDir, GenData* data);
 
-    int onNewSock(GenData* parentData,
-        GenData* childData, AccptOption& opt);
+    int onRecv(GenData* data, const char* buf,
+        int size, const SockAddr* addr);
+    
+    GenData* onNewSock(GenData* parentData,
+        int newFd, AccptOption& opt);
     int onConnect(GenData* data, ConnOption& opt);
     int onProcess(GenData* data, NodeMsg* pMsg);
     void onClose(GenData* data);
-
-    void initSock(GenData* data);
     
-private:
-    GenData* _allocData();
+private: 
+    void _allocData(GenData* obj);
     void _releaseData(GenData* ele);
     
     void releaseMsgQue(LList* runlist);
@@ -134,10 +132,6 @@ private:
     void calcBytes(EnumDir enDir, GenData* data, 
         unsigned now, unsigned& total, 
         unsigned& total2, unsigned& thresh);
-
-    void releaseRd(GenData* data);
-    void releaseWr(GenData* data);
-    void releaseDeal(GenData* data); 
     
 private:
     const int m_cap;
@@ -151,7 +145,6 @@ private:
     unsigned m_conn_timeout;
     unsigned m_rd_timeout;
     unsigned m_wr_timeout;
-    char m_buf[MAX_BUFF_SIZE];
 };
 
 #endif

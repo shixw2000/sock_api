@@ -11,6 +11,7 @@
 #include"socktool.h"
 #include"cmdcache.h"
 #include"nodebase.h"
+#include"cache.h"
 
 
 bool Receiver::recvSecCb(long data1, long, TimerObj*) {
@@ -21,26 +22,11 @@ bool Receiver::recvSecCb(long data1, long, TimerObj*) {
 }
 
 bool Receiver::recvTimeoutCb(long p1, 
-    long p2, TimerObj* obj) {
+    long p2, TimerObj*) {
     Receiver* receiver = (Receiver*)p1;
-    int* pevent = (int*)p2;
-    GenData* data = NULL;
+    GenData* data = (GenData*)p2;
     
-    data = ManageCenter::fromTimeout(ENUM_DIR_RECVER, obj);
-    
-    switch (*pevent) { 
-    case ENUM_TIMER_EVENT_TIMEOUT:
-        receiver->dealTimeoutCb(data);
-        break;
-
-    case ENUM_TIMER_EVENT_FLOWCTL:
-        receiver->flowCtlCb(data);
-        break;
-
-    default:
-        break;
-    }
-    
+    receiver->dealTimeoutCb(data); 
     return false;
 }
 
@@ -49,6 +35,7 @@ Receiver::PRdFunc Receiver::m_func[ENUM_RD_END] = {
     &Receiver::readDefault,
     &Receiver::readSock,
     &Receiver::readListener,
+    &Receiver::readUdp,
 };
 
 Receiver::Receiver(ManageCenter* center, Director* director) {
@@ -106,7 +93,7 @@ int Receiver::init() {
 
     m_pfds[0].fd = m_ev_fd[0];
     m_pfds[1].fd = m_timer_fd;
-    m_size = 2;
+    m_size = MIN_RCV_PFD;
 
     return ret;
 }
@@ -158,16 +145,22 @@ void Receiver::run() {
     }
 }
 
-void Receiver::doTasks() { 
-    wait(); 
-    consume();
+void Receiver::doTasks() {
+    LList runlist = INIT_LIST(runlist);
+    
+    wait(&runlist); 
+    consume(&runlist);
 }
 
-bool Receiver::wait() {
+bool Receiver::wait(LList* runlist) {
     int timeout = DEF_POLL_TIME_MSEC;
     int cnt = 0;
     unsigned tick = 0;
     GenData* data = NULL;
+
+    if (m_busy) {
+        timeout = 0;
+    }
     
     cnt = poll(m_pfds, m_size, timeout);
     if (0 == cnt) {
@@ -193,11 +186,11 @@ bool Receiver::wait() {
             --cnt;
         }
         
-        for (int i=2; i<m_size && 0 < cnt; ++i) {
+        for (int i=MIN_RCV_PFD; i<m_size && 0 < cnt; ++i) {
             if (0 != m_pfds[i].revents) { 
                 data = find(m_pfds[i].fd); 
                     
-                queue(data);
+                toRead(runlist, data);
                 
                 /* reset the flag */
                 m_pfds[i].revents = 0; 
@@ -247,8 +240,9 @@ void Receiver::flowCtl(GenData* data, unsigned total) {
     _disableFd(data);
 
     m_center->cancelTimer(ENUM_DIR_RECVER, data);
-    m_center->enableTimer(ENUM_DIR_RECVER, m_timer, 
-        data, ENUM_TIMER_EVENT_FLOWCTL);
+    m_center->enableTimer(ENUM_DIR_RECVER, m_timer, data,
+        ENUM_TIMER_EVENT_FLOWCTL,
+        DEF_FLOWCTL_TICK_NUM);
         
     setStat(data, ENUM_STAT_FLOWCTL);
 }
@@ -267,12 +261,12 @@ void Receiver::readDefault(GenData* data) {
 }
 
 void Receiver::readSock(GenData* data) {
-    unsigned long long now = m_timer->now();
+    unsigned now = m_timer->now();
     int fd = m_center->getFd(data);
-    int ret = 0;
+    EnumSockRet ret = ENUM_SOCK_RET_OK;
     unsigned max = 0;
     unsigned threshold = 0;
-    unsigned total = 0;
+    int total = 0;
 
     m_center->clearBytes(ENUM_DIR_RECVER, data, now);
     threshold = m_center->getRdThresh(data); 
@@ -285,48 +279,58 @@ void Receiver::readSock(GenData* data) {
         }
     } else {
         max = 0;
+    } 
+ 
+    ret = recvTcp(data, max, &total);
+    if (0 < total) {
+        LOG_DEBUG("read_sock| fd=%d| ret=%d| max=%u| total=%u|",
+            fd, ret, max, total); 
+    
+        m_center->recordBytes(ENUM_DIR_RECVER, data, now, total); 
+        addFlashTimeout(data);
     }
     
-    do {
-        ret = m_center->recvMsg(data, max);
-        if (0 < ret) { 
-            total += ret;
-            
-            if (0 < max && total >= max) {
-                break; 
-            } 
+    if (ENUM_SOCK_RET_OK == ret) {
+        /* for next run loop */
+        if (!m_busy) {
+            m_busy = true;
         }
-    } while (0 < ret);
-
-    if (0 <= ret) {
-        if (0 < total) {
-            LOG_DEBUG("read_sock| fd=%d| ret=%d| max=%u| total=%u|",
-                fd, ret, max, total); 
-        
-            m_center->recordBytes(ENUM_DIR_RECVER, data, now, total);
-
-            addFlashTimeout(data);
-        }
-        
-        if (0 < ret) {
-            flowCtl(data, total);
-        } else { 
-            setStat(data, ENUM_STAT_BLOCKING);
-        }
-    } else {
-        LOG_INFO("read_sock| fd=%d| ret=%d| max=%u| total=%u| msg=close|",
-            fd, ret, max, total);
-            
-        if (-2 == ret) {
-            detach(data, ENUM_STAT_CLOSING);
-        } else {
-            detach(data, ENUM_STAT_ERROR);
-        }
-        
+    } else if (ENUM_SOCK_RET_BLOCK == ret) {
+        setStat(data, ENUM_STAT_BLOCKING); 
+    } else { 
+        detach(data, ENUM_STAT_ERROR);
         _disableFd(data); 
         
         m_director->notifyClose(data);
-    } 
+    }
+}
+
+void Receiver::readUdp(GenData* data) {
+    unsigned now = m_timer->now();
+    int fd = m_center->getFd(data);
+    EnumSockRet ret = ENUM_SOCK_RET_OK;
+    int total = 0;
+    
+    ret = recvUdp(data, 0, &total);
+    if (0 < total) {
+        LOG_DEBUG("read_upd| fd=%d| ret=%d| total=%d|",
+            fd, ret, total);
+        
+        m_center->recordBytes(ENUM_DIR_RECVER, data, now, total);
+    }
+    
+    if (ENUM_SOCK_RET_OK == ret) {
+        /* for next run loop */
+        if (!m_busy) {
+            m_busy = true;
+        }
+    } else if (ENUM_SOCK_RET_BLOCK == ret) { 
+        setStat(data, ENUM_STAT_BLOCKING);
+    } else { 
+        detach(data, ENUM_STAT_CLOSING);
+        _disableFd(data); 
+        m_director->notifyClose(data);
+    }
 }
 
 void Receiver::dealRunQue(LList* list) {
@@ -352,14 +356,28 @@ void Receiver::startTimer1Sec() {
 }
 
 void Receiver::dealTimeoutCb(GenData* data) { 
-    LOG_INFO("flash_timeout| fd=%d| msg=read close|",
-        m_center->getFd(data));
-    
-    detach(data, ENUM_STAT_TIMEOUT); 
+    int event = 0;
 
-    _disableFd(data);
+    event = ManageCenter::getEvent(ENUM_DIR_RECVER, data); 
+    switch (event) { 
+    case ENUM_TIMER_EVENT_TIMEOUT:
+        LOG_INFO("flash_timeout| fd=%d| msg=read close|",
+            m_center->getFd(data));
+        
+        detach(data, ENUM_STAT_TIMEOUT); 
+        _disableFd(data); 
+        m_director->notifyClose(data); 
+        break;
+
+    case ENUM_TIMER_EVENT_FLOWCTL:
+        flowCtlCb(data);
+        break;
+
+    default:
+        break;
+    }
     
-    m_director->notifyClose(data); 
+    
 }
 
 void Receiver::addFlashTimeout(
@@ -404,14 +422,13 @@ void Receiver::setStat(GenData* data, int stat) {
     m_center->setStat(ENUM_DIR_RECVER, data, stat); 
 }
 
-void Receiver::consume() {
+void Receiver::consume(LList* runlist) {
     unsigned tick = 0;
-    LList runlist = INIT_LIST(runlist);
     LList cmdlist = INIT_LIST(cmdlist);
     
     lock();
     if (!isEmpty(&m_run_queue)) {
-        append(&runlist, &m_run_queue);
+        append(runlist, &m_run_queue);
     }
 
     if (!isEmpty(&m_cmd_queue)) {
@@ -428,8 +445,8 @@ void Receiver::consume() {
     }
     unlock();
 
-    if (!isEmpty(&runlist)) {
-        dealRunQue(&runlist);
+    if (!isEmpty(runlist)) {
+        dealRunQue(runlist);
     } 
 
     if (0 < tick) {
@@ -460,16 +477,16 @@ bool Receiver::_queue(GenData* data, int expectStat) {
     return action;
 }
 
-bool Receiver::queue(GenData* data) {
-    bool action = false;
+void Receiver::toRead(LList* runlist, GenData* data) { 
+    /* delete from wait queue, no need lock */
+    setStat(data, ENUM_STAT_READY);
+    m_center->delNode(ENUM_DIR_RECVER, data);
 
-    LOG_DEBUG("fd=%d| msg=read event|", m_center->getFd(data));
-    
-    lock();
-    action = _queue(data, ENUM_STAT_BLOCKING);
-    unlock();
-
-    return action;
+    /* add to run queue */
+    m_center->addNode(ENUM_DIR_RECVER, runlist, data); 
+    if (!m_busy) {
+        m_busy = true;
+    }
 }
 
 void Receiver::detach(GenData* data, int stat) {
@@ -594,9 +611,10 @@ void Receiver::cmdUndelayFd(NodeMsg* base) {
     pCmd = CmdUtil::getCmdBody<CmdComm>(base);
     fd = pCmd->m_fd;
 
-    LOG_DEBUG("undelay_fd| fd=%d|", fd);
+    assert(exists(fd));
     
     if (exists(fd)) { 
+        LOG_DEBUG("undelay_fd| fd=%d|", fd);
         data = find(fd); 
         index = m_center->getRdIndex(data);
 
@@ -626,7 +644,9 @@ void Receiver::_AddFd(NodeMsg* base, bool delay) {
         cb = m_center->getCb(ENUM_DIR_RECVER, data);
         stat = m_center->getStat(ENUM_DIR_RECVER, data);
         
-        if(ENUM_STAT_INIT == stat) {
+        assert(ENUM_STAT_INVALID == stat);
+        
+        if(ENUM_STAT_INVALID == stat) {
             
             m_pfds[m_size].events = POLLIN;
             m_pfds[m_size].revents = 0; 
@@ -639,10 +659,7 @@ void Receiver::_AddFd(NodeMsg* base, bool delay) {
                 setStat(data, ENUM_STAT_DELAY);
             }
 
-            if (ENUM_RD_SOCK == cb) {
-                m_center->setTimerParam(ENUM_DIR_RECVER,
-                    data, &Receiver::recvTimeoutCb, (long)this);
-                
+            if (ENUM_RD_SOCK == cb) { 
                 addFlashTimeout(data, true);
             }
 
@@ -665,7 +682,9 @@ void Receiver::cmdRemoveFd(NodeMsg* base) {
     pCmd = CmdUtil::getCmdBody<CmdComm>(base); 
     fd = pCmd->m_fd; 
     
-    LOG_INFO("receiver_remove_fd| fd=%d|", fd);
+    LOG_DEBUG("receiver_remove_fd| fd=%d|", fd);
+    
+    assert(exists(fd) && MIN_RCV_PFD < m_size);
     
     if (exists(fd)) { 
         data = find(fd); 
@@ -673,7 +692,7 @@ void Receiver::cmdRemoveFd(NodeMsg* base) {
         detach(data, ENUM_STAT_INVALID);
     
         index = m_center->getRdIndex(data);
-        m_center->setRdIndex(data, 0);
+        m_center->setRdIndex(data, -70000);
 
         --m_size;
         if (index < m_size) {
@@ -700,5 +719,81 @@ void Receiver::cmdRemoveFd(NodeMsg* base) {
 
 bool Receiver::exists(int fd) const {
     return m_center->exists(fd);
+}
+
+EnumSockRet Receiver::recvTcp(GenData* data, 
+    int max, int* prdLen) {
+    EnumSockRet ret = ENUM_SOCK_RET_OK;
+    int fd = m_center->getFd(data);
+    int rdLen = 0;
+    int size = 0;
+    int errcode = 0;
+    int total = 0; 
+
+    if (!(0 < max) || max > MAX_SIZE_ONCE_RDWR) {
+        max = MAX_SIZE_ONCE_RDWR;
+    } 
+
+    while (0 < max && ENUM_SOCK_RET_OK == ret) {
+        if (MAX_BUFF_SIZE < max) {
+            size = MAX_BUFF_SIZE;
+        } else {
+            size = max;
+        }
+
+        ret = SockTool::recvTcp(fd, m_buf, size, &rdLen);
+        if (0 < rdLen) {
+            total += rdLen;
+            max -= rdLen;
+            
+            errcode = m_center->onRecv(data, m_buf, rdLen, NULL);
+            if (0 != errcode) {
+                ret = ENUM_SOCK_RET_PARSED;
+            }
+        }
+    } 
+    
+    if (NULL != prdLen) {
+        *prdLen = total;
+    }
+    
+    return ret;
+}
+
+EnumSockRet Receiver::recvUdp(
+    GenData* data, int max, int* prdLen) {
+    EnumSockRet ret = ENUM_SOCK_RET_OK;
+    int fd = m_center->getFd(data);
+    int total = 0;
+    int rdlen = 0;
+    int errcode = 0;
+    struct iovec iov;
+    SockAddr addr; 
+
+    if (!(0 < max) || max > MAX_SIZE_ONCE_RDWR) {
+        max = MAX_SIZE_ONCE_RDWR;
+    }
+    
+    while (ENUM_SOCK_RET_OK == ret &&
+        total < max) {
+        iov.iov_base = m_buf;
+        iov.iov_len = sizeof(m_buf);
+    
+        ret = SockTool::recvVec(fd, &iov, 1, &rdlen, &addr);
+        if (0 < rdlen) { 
+            total += rdlen;
+
+            errcode = m_center->onRecv(data, m_buf, rdlen, &addr); 
+            if (0 != errcode) {
+                ret = ENUM_SOCK_RET_PARSED;
+            }
+        } 
+    } 
+
+    if (NULL != prdLen) {
+        *prdLen = total;
+    }
+    
+    return ret;
 }
 

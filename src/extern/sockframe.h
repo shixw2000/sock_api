@@ -1,9 +1,8 @@
 #ifndef __SOCKFRAME_H__
 #define __SOCKFRAME_H__
 #include"isockapi.h"
+#include"shareheader.h" 
 
-
-typedef bool (*TimerFunc)(long, long);
 
 class SockFrame {
 private:
@@ -12,14 +11,14 @@ private:
     SockFrame();
     ~SockFrame();
 
-    int init();
+    int init(int cap);
     void finish();
 
     bool chkValid() const;
 
 public:
     static SockFrame* instance(); 
-    static void creat();
+    static void creat(int cap = MAX_FD_NUM);
     static void destroy(SockFrame* frame); 
 
     void start();
@@ -51,6 +50,8 @@ public:
     void closeData(int fd);
     void undelayRead(int fd);
 
+    int regUdp(int fd, ISockBase* base, long data2);
+    
     int creatSvr(const char szIP[], int port, 
         ISockSvr* svr, long data2);
 
@@ -62,6 +63,8 @@ public:
 
     int schedule(unsigned delay, unsigned interval,
         TimerFunc func, long data, long data2 = 0);
+
+    void setTimerPerSec(ITimerCb* cb);
 
 private:
     _intern* m_intern;

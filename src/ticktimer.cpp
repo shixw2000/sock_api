@@ -3,14 +3,15 @@
 #include"ticktimer.h"
 #include"shareheader.h"
 #include"cache.h"
+#include"misc.h"
 
 
 TickTimer::TickTimer() {
     m_tick = 0;
 
-    memset(m_tv1, 0, sizeof(m_tv1));
-    memset(m_tv2, 0, sizeof(m_tv2));
-    memset(m_tv3, 0, sizeof(m_tv3));
+    MiscTool::bzero(m_tv1, sizeof(m_tv1));
+    MiscTool::bzero(m_tv2, sizeof(m_tv2));
+    MiscTool::bzero(m_tv3, sizeof(m_tv3));
 }
 
 TickTimer::~TickTimer() {
@@ -131,7 +132,7 @@ void TickTimer::delTimer(TimerObj* ele) {
 }
 
 void TickTimer::initObj(TimerObj* ele) {
-    memset(ele, 0, sizeof(TimerObj));
+    MiscTool::bzero(ele, sizeof(TimerObj));
 }
 
 void TickTimer::setTimerCb(TimerObj* ele, 

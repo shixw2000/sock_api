@@ -3,6 +3,7 @@
 #include"shareheader.h"
 #include"llist.h"
 #include"cache.h"
+#include"misc.h"
 
 
 void initList(LList* list) {
@@ -126,7 +127,7 @@ void hlistReplace(HRoot* dst, HRoot* src) {
 
 /* here is a queue */
 void initQue(Queue* queue) {
-    memset(queue, 0, sizeof(Queue));
+    MiscTool::bzero(queue, sizeof(Queue));
 }
 
 bool creatQue(Queue* queue, int cap) {
@@ -148,7 +149,7 @@ void finishQue(Queue* queue) {
         CacheUtil::freeAlign(queue->m_cache);
     }
 
-    memset(queue, 0, sizeof(Queue));
+    MiscTool::bzero(queue, sizeof(Queue));
 }
 
 bool isQueEmpty(Queue* queue) {

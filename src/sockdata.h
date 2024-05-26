@@ -9,20 +9,23 @@ struct NodeMsg;
 struct GenData; 
 
 static const int DEF_TICK_MSEC = 250;
-static const unsigned DEF_NUM_PER_SEC = 4;
+static const unsigned DEF_NUM_PER_SEC = 1000 / DEF_TICK_MSEC;
 static const int MASK_PER_SEC = 0x3;
 static const int DEF_FLOWCTL_TICK_NUM = 2;
 static const int DEF_POLL_TIME_MSEC = 1000;
 
+static const int MAX_IOVEC_SIZE = 100;
+static const int MAX_SIZE_ONCE_RDWR = 1024 * 1024 * 10;
 static const int MAX_BUFF_SIZE = 1024 * 1024;
-static const int MAX_FD_NUM = 10000;
 static const int DEF_CONN_TIMEOUT_TICK = 3 * DEF_NUM_PER_SEC;
 static const int DEF_RDWR_TIMEOUT_TICK = 60 * DEF_NUM_PER_SEC;
+static const int DEF_LISTENER_SLEEP_TICK = 10 * DEF_NUM_PER_SEC;
 
 enum EnumRdCb {
     ENUM_RD_DEFAULT = 0,
     ENUM_RD_SOCK,
     ENUM_RD_LISTENER,
+    ENUM_RD_UDP,
 
     ENUM_RD_END
 };
@@ -31,6 +34,7 @@ enum EnumWrCb {
     ENUM_WR_DEFAULT = 0,
     ENUM_WR_SOCK,
     ENUM_WR_Connector,
+    ENUM_WR_UDP,
 
     ENUM_WR_END
 };
@@ -60,7 +64,7 @@ enum EnumSockStat {
 };
 
 enum EnumDir {
-    ENUM_DIR_RECVER,
+    ENUM_DIR_RECVER = 0,
     ENUM_DIR_SENDER,
     ENUM_DIR_DEALER,
     

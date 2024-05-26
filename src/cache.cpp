@@ -1,6 +1,7 @@
 #include<cstring>
 #include<cstdlib>
 #include"shareheader.h"
+#include"misc.h"
 #include"cache.h"
 
 
@@ -16,19 +17,6 @@ struct Cache {
     int m_cap;
     char m_buf[0];
 };
-
-void CacheUtil::bzero(void* dst, int size) {
-    if (0 < size) {
-        memset(dst, 0, size);
-    }
-}
-
-void CacheUtil::bcopy(void* dst,
-    const void* src, int size) {
-    if (0 < size) {
-        memcpy(dst, src, size);
-    }
-}
         
 char** CacheUtil::align(char* ptr) {
     size_t n = (size_t)ptr;
@@ -60,7 +48,7 @@ char* CacheUtil::callocAlign(int nmemb, int size) {
 
     psz = mallocAlign(total);
     if (NULL != psz) {
-        bzero(psz, total);
+        MiscTool::bzero(psz, total);
     }
     
     return psz;
@@ -82,7 +70,7 @@ Cache* CacheUtil::alloc(int capacity, PFree pf) {
     if (0 < capacity) {
         cache = (Cache*)mallocAlign(sizeof(Cache) + capacity + 1); 
         if (NULL != cache) { 
-            bzero(cache, sizeof(*cache));
+            MiscTool::bzero(cache, sizeof(*cache));
             
             cache->m_pf = pf;
             cache->m_cap = capacity; 
@@ -141,7 +129,7 @@ Cache* CacheUtil::realloc(Cache* src, int capacity, int used) {
         dst = alloc(capacity, src->m_pf);
         if (NULL != dst) {
             if (0 < used) {
-                bcopy(dst->m_buf, src->m_buf, used);
+                MiscTool::bcopy(dst->m_buf, src->m_buf, used);
             }
             
             del(src);

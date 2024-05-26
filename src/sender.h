@@ -3,6 +3,7 @@
 #include<poll.h>
 #include"sockdata.h"
 #include"cthread.h"
+#include"socktool.h"
 
 
 struct pollfd;
@@ -14,6 +15,8 @@ class Lock;
 
 class Sender: public CThread {
     typedef void (Sender::*PWrFunc)(GenData* data);
+
+    static const int MIN_SND_PFD = 1;
     
 public:
     Sender(ManageCenter* center, Director* director);
@@ -31,12 +34,15 @@ public:
     int notifyTimer(unsigned tick); 
     int activate(GenData* data);
 
+    static bool sendTimeoutCb(long p1, 
+        long p2, TimerObj* obj);
+
 private:
     void run();
     
     void doTasks();
-    void consume();
-    bool wait();
+    void consume(LList* runlist);
+    bool wait(LList* runlist);
 
     void lock();
     void unlock();
@@ -45,7 +51,7 @@ private:
 
     void setStat(GenData* data, int stat);
 
-    bool queue(GenData* data);
+    void toWrite(LList* runlist, GenData* data);
     bool _queue(GenData* data, int expectStat);
     int _activate(GenData* data, int stat);
     void detach(GenData* data, int stat);
@@ -63,24 +69,37 @@ private:
     void writeDefault(GenData* data);
     void writeSock(GenData* data);
     void writeConnector(GenData* data); 
+    void writeUdp(GenData* data);
 
     void dealCmds(LList* list); 
     void procCmd(NodeMsg* base);
     void cmdAddFd(NodeMsg* base);
     void cmdRemoveFd(NodeMsg* base); 
 
+    EnumSockRet sendTcp(int fd, LList* list, 
+        int max, int* pwrLen);
+    
+    EnumSockRet sendUdp(int fd, LList* list, 
+        int max, int* pwrLen);
+    
+    int prepareQue(LList* list, 
+        struct iovec* iov, int size, int max);
+    
+    int purgeQue(LList* list, int max);
+    
+    int prepareMsg(NodeMsg* pMsg,
+        struct iovec* iov, int size, int* pmax);
+    
+    bool purgeMsg(NodeMsg* pMsg, int* pmax);
+
     void cbTimer1Sec();
     void startTimer1Sec();
-    static bool sendSecCb(long data1, long, TimerObj*);
-    static bool sendTimeoutCb(long p1, 
-        long p2, TimerObj* obj);
-
-    void writeMsgQue(GenData* data, LList* queue,
-        unsigned now, unsigned max);
+    static bool sendSecCb(long data1, long, TimerObj*); 
 
 private:
     static PWrFunc m_func[ENUM_WR_END];
     LList m_run_queue;
+    LList m_priv_run_queue;
     LList m_wait_queue;
     LList m_cmd_queue;
     bool m_busy;

@@ -17,6 +17,7 @@
 #define __END_RUN__ __attribute__((unused, destructor))
 
 static const char DEF_LOG_LINK_NAME[] = "run.log";
+static const int MAX_LOG_NAME_SIZE = 32;
 static const char DEF_LOG_NAME_FORMAT[] = "run_%03d.log";
 static const char DEF_LOG_NAME_PATTERN[] = "^run_([0-9]{3}).log$";
 static const char DEF_NULL_FILE[] = "/dev/null";
@@ -27,36 +28,46 @@ static const char* DEF_LOG_DESC[MAX_LOG_LEVEL] = {
     "ERROR", "WARN", "INFO", "DEBUG", "VERB" 
 };
 
-static Clog* g_log = NULL;
+class _Clog { 
+public: 
+    _Clog();
+    ~_Clog();
+    
+    int init(const char* path); 
+    void finish();
+    
+    int formatLog(int level, const char format[], ...);
+    int vformatLog(int level, const char format[], va_list ap);
+    
+    void setLogLevel(int level);
+    void setLogScreen(bool on);
 
-Clog* Clog::instance() {
-    return g_log;
-}
+    /* unit: MB */
+    void setMaxLogSize(int size);
+    
+    void setMaxLogCnt(int cnt);
+    
+private: 
+    void setDir(const char dir[]);
+    int preTag(unsigned tid, char stamp[], int max);
+    int findIndex();
+    int openLog(int index, bool append);
+    int openFile(const char name[], bool append);
+    bool isFileMax() const;
+    
+private:
+    long m_curr_size;
+    long m_max_size;
+    int m_max_log_cnt;
+    int m_curr_index; 
+    int m_log_level;
+    int m_log_fd;
+    bool m_has_stdout;
+    bool m_bValid;
+    char m_dir[128];
+};
 
-void Clog::initLog() {
-    if (NULL == g_log) {
-        g_log = new Clog;
-    }
-}
-
-void Clog::destroyLog() {
-    if (NULL != g_log) { 
-        g_log->finish();
-        delete g_log;
-
-        g_log = NULL;
-    }
-}
-
-void __INIT_RUN__ _initLog() {
-    Clog::initLog();
-}
-
-void __END_RUN__ _finishLog() {
-    Clog::destroyLog();
-}
-
-Clog::Clog() { 
+_Clog::_Clog() { 
     m_bValid = false;
     
     m_log_fd = 0;
@@ -68,14 +79,14 @@ Clog::Clog() {
     m_max_size = MAX_LOG_FILE_SIZE;
     m_max_log_cnt = MAX_LOG_FILE_CNT;
     
-    memset(m_dir, 0, sizeof(m_dir));
+    MiscTool::bzero(m_dir, sizeof(m_dir));
     setDir(DEF_LOG_DIR);
 }
 
-Clog::~Clog() {
+_Clog::~_Clog() {
 }
 
-int Clog::init(const char* dir) {
+int _Clog::init(const char* dir) {
     int ret = 0;
     int index = 0;
 
@@ -91,7 +102,9 @@ int Clog::init(const char* dir) {
 
         if (0 == ret) {
             LOG_INFO("prog_start| log_dir=%s| version=%s|"
-                " msg=start now|", m_dir, DEF_BUILD_VER);
+                " pid=%d| msg=start now|", 
+                m_dir, DEF_BUILD_VER, 
+                MiscTool::getPid());
         } else {
             fprintf(stderr, "init_log| ret=%d| log_dir=%s|"
                 " msg=init log err|\n", ret, m_dir);
@@ -101,8 +114,11 @@ int Clog::init(const char* dir) {
     return ret;
 }
 
-void Clog::finish() {
-    LOG_INFO("prog_stop| version=%s| msg=exit now|", DEF_BUILD_VER);
+void _Clog::finish() {
+    LOG_INFO("prog_stop| version=%s|"
+        " pid=%d| msg=exit now|", 
+        DEF_BUILD_VER,
+        MiscTool::getPid());
     
     m_bValid = false;
     
@@ -112,43 +128,42 @@ void Clog::finish() {
     }
 }
 
-void Clog::setDir(const char dir[]) {
-    int max = sizeof(m_dir) - 1;
+void _Clog::setDir(const char dir[]) {
+    int max = sizeof(m_dir);
     int len = 0;
     
     if (NULL != dir && '\0' != dir[0]) {
-        len = strnlen(dir, max);
+        len = MiscTool::strLen(dir, max);
         while (0 < len && '/' == dir[len-1]) {
             --len;
         }
 
-        if (0 < len) {
-            strncpy(m_dir, dir, len);
-            m_dir[len] = '\0';
+        if (0 < len && len < max) {
+            MiscTool::strCpy(m_dir, dir, len + 1);
         } 
     }
 }
 
-void Clog::setLogLevel(int level) {
+void _Clog::setLogLevel(int level) {
     m_log_level = level;
 }
 
-void Clog::setLogScreen(bool on) {
+void _Clog::setLogScreen(bool on) {
     m_has_stdout = on;
 }
 
-void Clog::setMaxLogSize(int size) {
+void _Clog::setMaxLogSize(int size) {
     m_max_size = size;
     m_max_size *= 1024 * 1024;
 }
 
-void Clog::setMaxLogCnt(int cnt) {
+void _Clog::setMaxLogCnt(int cnt) {
     if (0 < cnt) {
         m_max_log_cnt = cnt;
     }
 }
 
-int Clog::findIndex() {
+int _Clog::findIndex() {
     const char* psz = NULL;
     int ret = 0; 
     int index = 0;
@@ -158,9 +173,11 @@ int Clog::findIndex() {
     char buf[256] = {0};
 
     if ('\0' != m_dir[0]) {
-        snprintf(buf, sizeof(buf), "%s/%s", m_dir, DEF_LOG_LINK_NAME);
+        MiscTool::strPrint(buf, sizeof(buf), 
+            "%s/%s", m_dir, DEF_LOG_LINK_NAME);
     } else {
-        snprintf(buf, sizeof(buf), "%s", DEF_LOG_LINK_NAME);
+        MiscTool::strPrint(buf, sizeof(buf),
+            "%s", DEF_LOG_LINK_NAME);
     }
     
     ret = readlink(buf, name, MAX_LOG_NAME_SIZE-1);
@@ -190,7 +207,7 @@ int Clog::findIndex() {
     return index;
 }
 
-int Clog::openFile(const char name[], bool append) {
+int _Clog::openFile(const char name[], bool append) {
     int fd = 0;
     int flag = O_WRONLY | O_CREAT;
 
@@ -211,7 +228,7 @@ int Clog::openFile(const char name[], bool append) {
     return fd;
 }
 
-int Clog::openLog(int index, bool append) {
+int _Clog::openLog(int index, bool append) {
     int ret = 0;
     int fd = 0;
     int size = 0;
@@ -223,18 +240,18 @@ int Clog::openLog(int index, bool append) {
         index = 0;
     }
     
-    snprintf(name, MAX_LOG_NAME_SIZE, 
+    MiscTool::strPrint(name, MAX_LOG_NAME_SIZE, 
         DEF_LOG_NAME_FORMAT, index);
 
     if ('\0' != m_dir[0]) {
-        snprintf(logfile, sizeof(logfile),
+        MiscTool::strPrint(logfile, sizeof(logfile),
             "%s/%s", m_dir, name);
-        snprintf(symfile, sizeof(logfile),
+        MiscTool::strPrint(symfile, sizeof(logfile),
             "%s/%s", m_dir, DEF_LOG_LINK_NAME);
     } else {
-        snprintf(logfile, sizeof(logfile),
+        MiscTool::strPrint(logfile, sizeof(logfile),
             "%s", name);
-        snprintf(symfile, sizeof(logfile),
+        MiscTool::strPrint(symfile, sizeof(logfile),
             "%s", DEF_LOG_LINK_NAME);
     }
     
@@ -272,7 +289,7 @@ int Clog::openLog(int index, bool append) {
     }
 }
 
-bool Clog::isFileMax() const {
+bool _Clog::isFileMax() const {
     if (m_curr_size < m_max_size) {
         return false;
     } else {
@@ -280,7 +297,7 @@ bool Clog::isFileMax() const {
     }
 }
 
-int Clog::preTag(unsigned tid, char stamp[], int max) {
+int _Clog::preTag(unsigned tid, char stamp[], int max) {
     int cnt = 0;
     ClockTime ct1;
     time_t in;
@@ -288,26 +305,34 @@ int Clog::preTag(unsigned tid, char stamp[], int max) {
 
     MiscTool::getTime(&ct1);
 
+    MiscTool::bzero(&out, sizeof(out));
+    
     in = ct1.m_sec;
-    memset(&out, 0, sizeof(out));
     localtime_r(&in, &out);
-    cnt = snprintf(stamp, max, "<%d-%02d-%02d %02d:%02d:%02d.%03u %u> ",
+    cnt = MiscTool::strPrint(stamp, max, 
+        "<%d-%02d-%02d %02d:%02d:%02d.%03u %u> ",
         out.tm_year + 1900, out.tm_mon + 1,
         out.tm_mday, out.tm_hour,
         out.tm_min, out.tm_sec,
         ct1.m_msec,
         tid);
-    if (0 < cnt && cnt < max) {
-        return cnt;
-    } else {
-        stamp[0] = '\0';
-        return 0;
-    }
+    
+    return cnt;
 }
 
-void Clog::formatLog(int level, const char format[], ...) { 
-    char* psz = NULL;
+int _Clog::formatLog(int level, const char format[], ...) {
     va_list ap;
+    int cnt = 0;
+
+    va_start(ap, format);
+    cnt = formatLog(level, format, ap);
+    va_end(ap);
+    
+    return cnt;
+}
+
+int _Clog::vformatLog(int level, const char format[], va_list ap) { 
+    char* psz = NULL;
     int maxlen = 0;
     int size = 0;
     int cnt = 0;
@@ -316,7 +341,7 @@ void Clog::formatLog(int level, const char format[], ...) {
     char cache[MAX_LOG_CACHE_SIZE] = {0};
 
     if (level > m_log_level) {
-        return;
+        return 0;
     }
 
     index = m_curr_index;
@@ -326,7 +351,8 @@ void Clog::formatLog(int level, const char format[], ...) {
     psz = cache;
     maxlen = MAX_LOG_CACHE_SIZE - 1; // last has a LF char
 
-    cnt = snprintf(psz, maxlen, "[%s]", DEF_LOG_DESC[level]);
+    cnt = MiscTool::strPrint(psz, maxlen,
+        "[%s]", DEF_LOG_DESC[level]);
     psz += cnt;
     maxlen -= cnt;
     size += cnt;
@@ -336,15 +362,13 @@ void Clog::formatLog(int level, const char format[], ...) {
     maxlen -= cnt;
     size += cnt;
     
-    va_start(ap, format);
     cnt = vsnprintf(psz, maxlen, format, ap);
-    va_end(ap); 
     if (0 < cnt && cnt < maxlen) {
         psz += cnt;
         maxlen -= cnt;
         size += cnt;
     } else if (cnt >= maxlen) {
-        cnt = maxlen - 1;
+        cnt = maxlen;
         psz += cnt;
         maxlen -= cnt;
         size += cnt;
@@ -364,11 +388,79 @@ void Clog::formatLog(int level, const char format[], ...) {
             if (isFileMax()) {
                 openLog(index + 1, false);
             }
+        } else {
+            cnt = 0;
         }
+    } else {
+        cnt = 0;
     }
     
     if (m_has_stdout) {
         write(DEF_STDOUT_FD, cache, size); 
     } 
+
+    return cnt;
+}
+
+
+_Clog* Clog::m_log = NULL;
+
+void Clog::initLog() {
+    if (NULL == m_log) {
+        m_log = new _Clog;
+    }
+}
+
+void Clog::destroyLog() {
+    if (NULL != m_log) { 
+        m_log->finish();
+        delete m_log;
+
+        m_log = NULL;
+    }
+}
+
+int Clog::formatLog(int level, const char format[], ...) {
+    va_list ap;
+    int cnt = 0;
+
+    if (NULL != m_log) { 
+        va_start(ap, format);
+        cnt = m_log->vformatLog(level, format, ap);
+        va_end(ap);
+    }
+    
+    return cnt;
+}
+
+int Clog::confLog(const char dir[]) {
+   int ret = 0;
+
+   ret = m_log->init(dir);
+   return ret;
+}
+
+void Clog::setLogLevel(int level) {
+    m_log->setLogLevel(level);
+}
+
+void Clog::setLogScreen(bool on) {
+    m_log->setLogScreen(on);
+}
+
+void Clog::setMaxLogSize(int size) {
+    m_log->setMaxLogSize(size);
+}
+
+void Clog::setMaxLogCnt(int cnt) {
+    m_log->setMaxLogCnt(cnt);
+}
+
+void __INIT_RUN__ _initLog() {
+    Clog::initLog();
+}
+
+void __END_RUN__ _finishLog() {
+    Clog::destroyLog();
 }
 

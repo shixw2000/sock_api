@@ -10,22 +10,38 @@
 #include"msgtool.h"
 #include"ticktimer.h"
 #include"socktool.h"
+#include"cmdcache.h"
+#include"cache.h"
 
 
 Director::Director() {
     m_receiver = NULL;
     m_sender = NULL;
     m_dealer = NULL;
-    m_center = NULL; 
+    m_center = NULL;
+
+    m_fd_max = 0;
 }
 
 Director::~Director() {
 }
 
-int Director::init() {
-    int ret = 0; 
+int Director::init(int cap) {
+    int ret = 0;
+    unsigned long max = 0;
 
-    m_center = new ManageCenter;
+    ret = MiscTool::getRlimit(ENUM_RES_NOFILE, &max, NULL);
+    if (0 == ret) {
+        if (cap < (int)max) {
+            m_fd_max = cap;
+        } else {
+            m_fd_max = (int)max - 1;
+        }
+    } else {
+        m_fd_max = cap;
+    }
+
+    m_center = new ManageCenter(m_fd_max);
     ret = m_center->init();
 
     m_receiver = new Receiver(m_center, this);
@@ -176,7 +192,7 @@ int Director::sendCommCmd(EnumDir enDir,
     int ret = 0;
     NodeMsg* pCmd = NULL; 
     
-    pCmd = m_center->creatCmdComm(cmd, fd);
+    pCmd = creatCmdComm(cmd, fd);
     ret = sendCmd(enDir, pCmd);
     return ret;
 }
@@ -189,7 +205,7 @@ void Director::notifyClose(GenData* data) {
     if (close) {
         sendCommCmd(ENUM_DIR_RECVER, ENUM_CMD_REMOVE_FD, fd);
         
-        LOG_INFO("cmd_close_fd| fd=%d| msg=closing|", fd);
+        LOG_DEBUG("cmd_close_fd| fd=%d| msg=closing|", fd);
     }
 }
 
@@ -200,35 +216,8 @@ void Director::notifyClose(int fd) {
     if (close) {
         sendCommCmd(ENUM_DIR_RECVER, ENUM_CMD_REMOVE_FD, fd);
         
-        LOG_INFO("cmd_close_fd| fd=%d| msg=closing|", fd);
+        LOG_DEBUG("cmd_close_fd| fd=%d| msg=closing|", fd);
     }
-}
-
-int Director::regSvr(int fd, ISockSvr* svr, long data2,
-    const char szIP[], int port) {
-    int ret = 0;
-    GenData* data = NULL;
-
-    data = m_center->reg(fd);
-    if (NULL != data) { 
-        m_center->setData(data, svr, data2); 
-        m_center->setAddr(data, szIP, port);
-
-        /* just add fd for receiver */
-        m_center->setCb(ENUM_DIR_RECVER, data, ENUM_RD_LISTENER);
-        m_center->setStat(ENUM_DIR_RECVER, data, ENUM_STAT_INIT);
-
-        /* disable dealer */
-        m_center->setCb(ENUM_DIR_DEALER, data, ENUM_DEAL_LISTENER);
-        m_center->setStat(ENUM_DIR_DEALER, data, ENUM_STAT_DISABLE);
-        
-        /* begin receiver */
-        sendCommCmd(ENUM_DIR_RECVER, ENUM_CMD_ADD_FD, fd);
-    } else {
-        ret = -1;
-    }
-
-    return ret;
 }
 
 void Director::setTimeout(unsigned rd_timeout, unsigned wr_timeout) { 
@@ -236,34 +225,154 @@ void Director::setTimeout(unsigned rd_timeout, unsigned wr_timeout) {
         wr_timeout* DEF_NUM_PER_SEC);
 }
 
-int Director::regCli(int fd, ISockCli* cli, long data2,
-    const char szIP[], int port) {
-    int ret = 0;
+int Director::regSvr(int fd, ISockSvr* svr,
+    long data2, const char szIP[], int port) {
+    GenData* data = NULL;
+
+    data = m_center->reg(fd);
+    if (NULL != data) { 
+        m_center->setData(data, svr, data2); 
+        
+        m_center->setAddr(data, szIP, port);
+
+        /* just add fd for receiver */
+        m_center->setCb(ENUM_DIR_RECVER, data, ENUM_RD_LISTENER);
+        m_center->setStat(ENUM_DIR_RECVER, data, ENUM_STAT_INVALID);
+
+        /* disable dealer */
+        m_center->setCb(ENUM_DIR_DEALER, data, ENUM_DEAL_LISTENER);
+        m_center->setStat(ENUM_DIR_DEALER, data, ENUM_STAT_DISABLE);
+
+        m_center->setTimerParam(ENUM_DIR_DEALER,
+            data, &Dealer::dealerTimeoutCb, (long)m_dealer);
+
+        /* begin receiver */
+        sendCommCmd(ENUM_DIR_RECVER, ENUM_CMD_ADD_FD, fd);
+
+        return 0;
+    } else {
+        return -1;
+    }
+}
+
+int Director::regCli(int fd, ISockCli* cli, 
+    long data2, const char szIP[], int port) {
     GenData* data = NULL;
 
     data = m_center->reg(fd);
     if (NULL != data) { 
         m_center->setData(data, cli, data2);
         
-        m_center->setDefConnTimeout(data);
         m_center->setAddr(data, szIP, port);
+        m_center->setDefConnTimeout(data);
 
         /* just add fd for sener here */
         m_center->setCb(ENUM_DIR_SENDER, data, ENUM_WR_Connector);
-        m_center->setStat(ENUM_DIR_SENDER, data, ENUM_STAT_INIT);
+        m_center->setStat(ENUM_DIR_SENDER, data, ENUM_STAT_INVALID);
 
         /* disable dealer */
         m_center->setCb(ENUM_DIR_DEALER, data, ENUM_DEAL_Connector);
         m_center->setStat(ENUM_DIR_DEALER, data, ENUM_STAT_DISABLE);
 
-        /* begin sender */
-        sendCommCmd(ENUM_DIR_SENDER, ENUM_CMD_ADD_FD, fd);
-    } else {
-        ret = -1;
-    }
+        m_center->setTimerParam(ENUM_DIR_SENDER,
+            data, &Sender::sendTimeoutCb, (long)m_sender);
 
-    return ret;
+        sendCommCmd(ENUM_DIR_SENDER, ENUM_CMD_ADD_FD, fd);
+
+        return 0;
+    } else {
+        return -1;
+    }
 } 
+
+int Director::regUdp(int fd, 
+    ISockBase* base, long data2) {
+    GenData* data = NULL;
+    int ret = 0;
+    SockName name;
+    SockAddr addr;
+    
+    data = m_center->reg(fd);
+    if (NULL != data) { 
+        m_center->setData(data, base, data2);
+
+        ret = SockTool::getLocalSock(fd, addr);
+        if (0 == ret) {
+            SockTool::addr2IP(&name, &addr);
+            m_center->setAddr(data, name.m_ip, name.m_port); 
+        }
+        
+        /* just add fd for receiver */
+        m_center->setCb(ENUM_DIR_RECVER, data, ENUM_RD_UDP);
+        m_center->setStat(ENUM_DIR_RECVER, data, ENUM_STAT_INVALID);
+
+        /* set sender thread */
+        m_center->setCb(ENUM_DIR_SENDER, data, ENUM_WR_UDP);
+        m_center->setStat(ENUM_DIR_SENDER, data, ENUM_STAT_INVALID);
+
+        /* disable dealer */
+        m_center->setCb(ENUM_DIR_DEALER, data, ENUM_DEAL_SOCK);
+        m_center->setStat(ENUM_DIR_DEALER, data, ENUM_STAT_DISABLE);
+
+        /* begin threads */
+        sendCommCmd(ENUM_DIR_RECVER, ENUM_CMD_ADD_FD, fd); 
+        sendCommCmd(ENUM_DIR_SENDER, ENUM_CMD_ADD_FD, fd);
+        activate(ENUM_DIR_DEALER, data);
+
+        return 0;
+    } else {
+        return -1;
+    }
+} 
+
+void Director::beginSock(GenData* data, 
+    unsigned rd_thresh, unsigned wr_thresh,
+    bool delay) {
+    int fd = m_center->getFd(data);
+    
+    m_center->setDefIdleTimeout(data);
+    setSpeed(fd, rd_thresh, wr_thresh);
+        
+    /* just add fd for receiver */
+    m_center->setCb(ENUM_DIR_RECVER, data, ENUM_RD_SOCK);
+    m_center->setStat(ENUM_DIR_RECVER, data, ENUM_STAT_INVALID);
+
+    /* set sender thread */
+    m_center->setCb(ENUM_DIR_SENDER, data, ENUM_WR_SOCK);
+    m_center->setStat(ENUM_DIR_SENDER, data, ENUM_STAT_INVALID);
+
+    /* disable dealer */
+    m_center->setCb(ENUM_DIR_DEALER, data, ENUM_DEAL_SOCK);
+    m_center->setStat(ENUM_DIR_DEALER, data, ENUM_STAT_DISABLE); 
+
+    m_center->setTimerParam(ENUM_DIR_RECVER,
+        data, &Receiver::recvTimeoutCb, (long)m_receiver);
+    
+    m_center->setTimerParam(ENUM_DIR_SENDER,
+        data, &Sender::sendTimeoutCb, (long)m_sender);
+
+    m_center->setTimerParam(ENUM_DIR_DEALER,
+        data, &Dealer::dealerTimeoutCb, (long)m_dealer);
+
+    activate(ENUM_DIR_DEALER, data);
+    sendCommCmd(ENUM_DIR_SENDER, ENUM_CMD_ADD_FD, fd);
+
+    if (!delay) {
+        sendCommCmd(ENUM_DIR_RECVER, ENUM_CMD_ADD_FD, fd);
+    } else {
+        sendCommCmd(ENUM_DIR_RECVER, ENUM_CMD_DELAY_FD, fd);
+    }
+}
+
+void Director::closeData(GenData* data) {
+    int fd = m_center->getFd(data);
+    bool bOk = false;
+    
+    bOk = m_center->unreg(data); 
+    if (bOk) {
+        SockTool::closeSock(fd);
+    }
+}
 
 int Director::getAddr(int fd, int* pPort, 
     char ip[], int max) {
@@ -334,12 +443,7 @@ void Director::setMaxWrTimeout(int fd, unsigned timeout) {
     }
 }
 
-void Director::closeData(GenData* data) {
-    int fd = m_center->getFd(data);
-    
-    m_center->unreg(fd); 
-    SockTool::closeSock(fd);
-}
+
 
 int Director::schedule(unsigned delay, unsigned interval,
     TimerFunc func, long data, long data2) {
@@ -349,7 +453,7 @@ int Director::schedule(unsigned delay, unsigned interval,
     /* convert from sec to ticks*/
     delay *= DEF_NUM_PER_SEC;
     interval *= DEF_NUM_PER_SEC;
-    pCmd = m_center->creatCmdSchedTask(delay,
+    pCmd = creatCmdSchedTask(delay,
         interval, func, data, data2);
     if (NULL != pCmd) {
         ret = sendCmd(ENUM_DIR_DEALER, pCmd);
@@ -360,11 +464,14 @@ int Director::schedule(unsigned delay, unsigned interval,
     return ret;
 }
 
+void Director::setTimerPerSec(ITimerCb* cb) {
+    m_dealer->setTimerPerSec(cb);
+}
+
 struct TaskData {
     ISockBase* m_base;
     long m_data2;
-    int m_port;
-    char m_szIP[32];
+    SockName m_name;
 };
 
 static TaskData* allocTask() {
@@ -383,10 +490,9 @@ static bool _creatCli(long arg, long arg2) {
     TaskData* task = (TaskData*)arg2;
     ISockCli* cli = dynamic_cast<ISockCli*>(task->m_base);
     long data2 = task->m_data2;
-    int port = task->m_port;
-    const char* ip = task->m_szIP;
+    const SockName& name = task->m_name;
     
-    director->creatCli(ip, port, cli, data2);
+    director->creatCli(name.m_ip, name.m_port, cli, data2);
 
     freeTask(task);
     return false;
@@ -396,24 +502,21 @@ int Director::creatSvr(const char szIP[], int port,
     ISockSvr* svr, long data2) {
     int ret = 0;
     int fd = 0; 
+    SockName name;
 
     if (NULL == svr) {
         return -1;
     }
 
-    ret = SockTool::chkAddr(szIP, port);
+    SockTool::assign(name, szIP, port);
+    ret = SockTool::openName(&fd, name, m_center->capacity());
     if (0 != ret) {
-        return -1;
-    }
-    
-    fd = SockTool::creatListener(szIP, port);
-    if (0 >= fd) {
-        return -1;
+        return ret;
     }
 
     ret = regSvr(fd, svr, data2, szIP, port);
     if (0 == ret) {
-        return fd;
+        return ret;
     } else {
         SockTool::closeSock(fd);
         return -1;
@@ -424,25 +527,22 @@ int Director::creatCli(const char szIP[], int port,
     ISockCli* cli, long data2) { 
     int ret = 0;
     int fd = 0;
+    SockName name;
 
     if (NULL == cli) {
         return -1;
     }
 
-    ret = SockTool::chkAddr(szIP, port);
+    SockTool::assign(name, szIP, port);
+    ret = SockTool::connName(&fd, name);
     if (0 != ret) {
-        return -1;
-    }
-
-    fd = SockTool::creatConnector(szIP, port);
-    if (0 >= fd) {
         cli->onConnFail(data2, -1);
         return -1;
     }
 
     ret = regCli(fd, cli, data2, szIP, port);
     if (0 == ret) {
-        return fd;
+        return ret;
     } else {
         cli->onConnFail(data2, -1);
         SockTool::closeSock(fd);
@@ -470,8 +570,7 @@ int Director::sheduleCli(unsigned delay,
     
     data->m_base = base;
     data->m_data2 = data2;
-    data->m_port = port;
-    strncpy(data->m_szIP, szIP, sizeof(data->m_szIP) - 1);
+    SockTool::assign(data->m_name, szIP, port);
 
     ret = schedule(delay, 0, &_creatCli, (long)this, (long)data);
     return ret;
@@ -481,16 +580,31 @@ void Director::undelayRead(int fd) {
     sendCommCmd(ENUM_DIR_RECVER, ENUM_CMD_UNDELAY_FD, fd);
 }
 
-void Director::activateSock(GenData* data, bool delay) {
-    int fd = m_center->getFd(data); 
+NodeMsg* Director::creatCmdComm(EnumSockCmd cmd, int fd) {
+    NodeMsg* pCmd = NULL;
+    CmdComm* body = NULL;
     
-    activate(ENUM_DIR_DEALER, data);
-    sendCommCmd(ENUM_DIR_SENDER, ENUM_CMD_ADD_FD, fd);
+    pCmd = CmdUtil::creatCmd<CmdComm>(cmd);
+    body = CmdUtil::getCmdBody<CmdComm>(pCmd);
+    body->m_fd = fd;
 
-    if (!delay) {
-        sendCommCmd(ENUM_DIR_RECVER, ENUM_CMD_ADD_FD, fd);
-    } else {
-        sendCommCmd(ENUM_DIR_RECVER, ENUM_CMD_DELAY_FD, fd);
-    }
+    return pCmd;
 }
+
+NodeMsg* Director::creatCmdSchedTask(unsigned delay,
+    unsigned interval, TimerFunc func, long data, long data2) {
+    NodeMsg* pCmd = NULL;
+    CmdSchedTask* body = NULL;
+
+    pCmd = CmdUtil::creatCmd<CmdSchedTask>(ENUM_CMD_SCHED_TASK);
+    body = CmdUtil::getCmdBody<CmdSchedTask>(pCmd); 
+        
+    body->func = func;
+    body->m_data = data;
+    body->m_data2 = data2;
+    body->m_delay = delay;
+    body->m_interval = interval;
+
+    return pCmd;
+} 
 

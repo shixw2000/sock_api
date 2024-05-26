@@ -1,16 +1,10 @@
 #ifndef __CACHE_H__
 #define __CACHE_H__
+#include"shareheader.h"
 
-
-struct Cache; 
-
-typedef void (*PFree)(char*);
 
 class CacheUtil {
-public:
-    static void bzero(void* dst, int size);
-    static void bcopy(void* dst, const void* src, int size);
-    
+public: 
     static char* mallocAlign(int size);
     static char* callocAlign(int nmemb, int size);
     static void freeAlign(void* ptr);

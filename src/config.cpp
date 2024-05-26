@@ -2,6 +2,7 @@
 #include<cstdlib>
 #include<cstdio>
 #include"config.h"
+#include"misc.h"
 #include"shareheader.h"
 
 
@@ -10,7 +11,7 @@ int Config::strip(char* text, int max) {
     char* end = NULL;
     int len = 0;
 
-    len = strnlen(text, max);
+    len = MiscTool::strLen(text, max);
     beg = text;
     end = text + len;
 

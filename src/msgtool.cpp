@@ -4,6 +4,8 @@
 #include"msgtool.h"
 #include"nodebase.h"
 #include"cache.h"
+#include"misc.h"
+#include"socktool.h"
  
 
 NodeMsg* MsgTool::allocMsg(int size, int prelen) {
@@ -16,7 +18,7 @@ NodeMsg* MsgTool::allocMsg(int size, int prelen) {
         cache =CacheUtil::alloc(size);
         if (NULL != cache) {
             psz = CacheUtil::data(cache); 
-            CacheUtil::bzero(psz, size);
+            MiscTool::bzero(psz, size);
             
             NodeUtil::setCache(pb, ENUM_NODE_INFR,
                 cache, size);
@@ -135,4 +137,40 @@ int MsgTool::getLeft(NodeMsg* pb) {
 int MsgTool::getExtraLeft(NodeMsg* pb) {
     return NodeUtil::getLeft(pb, ENUM_NODE_VAR);
 }
+
+NodeMsg* MsgTool::allocUdpMsg(int size) {
+    NodeMsg* msg = NULL;
+
+    msg = allocMsg(size, sizeof(SockAddr));
+    return msg;
+}
+
+NodeMsg* MsgTool::refUdpMsg(NodeMsg* msg) {
+    return refNodeMsg(msg, sizeof(SockAddr));
+}
+
+int MsgTool::setUdpAddr(NodeMsg* msg, const SockAddr& addr) {
+    SockAddr* preh = NULL;
+    
+    preh = (SockAddr*)getPreNode(msg, sizeof(SockAddr));
+    if (NULL != preh) {
+        SockTool::setAddr(*preh, addr);
+
+        return 0;
+    } else {
+        return -1;
+    }
+}
+
+const SockAddr* MsgTool::getUdpAddr(NodeMsg* msg) {
+    SockAddr* preh = NULL;
+    
+    preh = (SockAddr*)getPreNode(msg, sizeof(SockAddr));
+    if (NULL != preh) {
+        return preh;
+    } else {
+        return NULL;
+    }
+}
+
 

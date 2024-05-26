@@ -1,5 +1,6 @@
 #include"shareheader.h"
 #include"cache.h"
+#include"misc.h"
 #include"llist.h"
 #include"nodebase.h"
 
@@ -23,7 +24,7 @@ NodeMsg* NodeUtil::creatNode(int prelen) {
 
     pb = (NodeMsg*)CacheUtil::mallocAlign(total);
     if (NULL != pb) {
-        CacheUtil::bzero(pb, total);
+        MiscTool::bzero(pb, total);
         
         initList(&pb->m_list); 
         pb->m_preLen = prelen;

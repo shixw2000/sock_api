@@ -3,6 +3,7 @@
 #include<poll.h>
 #include"sockdata.h"
 #include"cthread.h"
+#include"socktool.h"
 
 
 struct pollfd;
@@ -14,6 +15,8 @@ class Lock;
 
 class Receiver : public CThread { 
     typedef void (Receiver::*PRdFunc)(GenData* data);
+
+    static const int MIN_RCV_PFD = 2;
     
 public:
     Receiver(ManageCenter* center, Director* director);
@@ -28,12 +31,14 @@ public:
     int addCmd(NodeMsg* pCmd);
     int activate(GenData* data);
 
+    static bool recvTimeoutCb(long, long, TimerObj*);
+
 private: 
     void run();
 
     void doTasks();
-    bool wait();
-    void consume();
+    bool wait(LList* runlist);
+    void consume(LList* runlist);
 
     void lock();
     void unlock();
@@ -44,7 +49,7 @@ private:
     void _disableFd(GenData* data);
     void _enableFd(GenData* data);
     
-    bool queue(GenData* data);
+    void toRead(LList* runlist, GenData* data);
     bool _queue(GenData* data, int expectStat);
     int _activate(GenData* data, int stat);
     void detach(GenData* data, int stat);
@@ -59,11 +64,18 @@ private:
     void readDefault(GenData* data);
     void readSock(GenData* data);
     void readListener(GenData* data);
+    void readUdp(GenData* data);
 
     void dealCmds(LList* list); 
     void procCmd(NodeMsg* base);
     void cmdAddFd(NodeMsg* base);
     void cmdRemoveFd(NodeMsg* base);
+
+    EnumSockRet recvTcp(GenData* data,
+        int max, int* prdLen) ; 
+    
+    EnumSockRet recvUdp(GenData* data, 
+        int max, int* prdLen);
 
     void _AddFd(NodeMsg* base, bool delay);
     void cmdDelayFd(NodeMsg* base);
@@ -74,7 +86,7 @@ private:
     void cbTimer1Sec();
     void startTimer1Sec();
     static bool recvSecCb(long, long, TimerObj*);
-    static bool recvTimeoutCb(long, long, TimerObj*);
+    
 
 private:
     static PRdFunc m_func[ENUM_RD_END];
@@ -91,7 +103,8 @@ private:
     unsigned m_now_sec;
     int m_size;
     int m_ev_fd[2];
-    int m_timer_fd; 
+    int m_timer_fd;
+    char m_buf[MAX_BUFF_SIZE];
 };
 
 

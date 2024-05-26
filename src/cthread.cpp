@@ -10,7 +10,7 @@
 CThread::CThread() {
     m_thrId = 0;
     m_isRun = false;
-    memset(m_name, 0, sizeof(m_name));
+    MiscTool::bzero(m_name, sizeof(m_name));
 }
 
 CThread::~CThread() {
@@ -21,8 +21,8 @@ int CThread::start(const char name[]) {
     pthread_attr_t attr;
     pthread_t thr = 0;
 
-    memset(m_name, 0, sizeof(m_name));
-    strncpy(m_name, name, sizeof(m_name) - 1);
+    MiscTool::bzero(m_name, sizeof(m_name));
+    MiscTool::strCpy(m_name, name, sizeof(m_name));
 
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);

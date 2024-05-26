@@ -1,6 +1,7 @@
 #include"sockframe.h"
 #include"director.h"
 #include"misc.h"
+#include"socktool.h"
 
 
 struct SockFrame::_intern {
@@ -21,11 +22,11 @@ SockFrame* SockFrame::instance() {
     return g_frame;
 }
 
-void SockFrame::creat() {
+void SockFrame::creat(int cap) {
     if (NULL == g_frame) {
         g_frame = new SockFrame();
 
-        g_frame->init();
+        g_frame->init(cap);
     }
 }
 
@@ -38,7 +39,7 @@ void SockFrame::destroy(SockFrame* frame) {
     }
 }
 
-int SockFrame::init() {
+int SockFrame::init(int cap) {
     int ret = 0;
     _intern* intern = NULL;
     
@@ -47,7 +48,7 @@ int SockFrame::init() {
         return -1;
     }
     
-    ret = intern->director.init();
+    ret = intern->director.init(cap);
     if (0 == ret) {
         m_intern = intern;
         m_bValid = true;
@@ -188,6 +189,16 @@ int SockFrame::creatSvr(const char szIP[], int port,
     }
 }
 
+int SockFrame::regUdp(int fd, 
+    ISockBase* base, long data2) {
+    if (chkValid()) {
+        return m_intern->director.regUdp(fd, 
+            base, data2);
+    } else {
+        return -1;
+    }
+}
+
 int SockFrame::sheduleCli(unsigned delay, 
     const char szIP[], int port, 
     ISockCli* base, long data2) {
@@ -217,6 +228,12 @@ int SockFrame::schedule(unsigned delay,
             interval, func, data, data2);
     } else {
         return -1;
+    }
+}
+
+void SockFrame::setTimerPerSec(ITimerCb* cb) {
+    if (chkValid()) {
+        return m_intern->director.setTimerPerSec(cb);
     }
 }
 

@@ -1,6 +1,7 @@
 #include"shareheader.h"
 #include"nodebase.h"
 #include"cache.h"
+#include"misc.h"
 #include"cmdcache.h"
 
 
@@ -22,7 +23,7 @@ NodeMsg* CmdUtil::creatNodeCmd(int cmd, int size) {
         if (NULL != cache) {
             ph = (CmdHead_t*)CacheUtil::data(cache);
 
-            CacheUtil::bzero(ph, total);
+            MiscTool::bzero(ph, total);
             ph->m_cmd = cmd;
             ph->m_size = size;
             

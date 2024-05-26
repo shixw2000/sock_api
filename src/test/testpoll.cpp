@@ -5,7 +5,7 @@
 #include"config.h"
 
 
-int testSrv(Config* conf) {
+static int testSrv(Config* conf) {
     int ret = 0;
     GenSvr* psvr = NULL;
 
@@ -23,6 +23,7 @@ int testSrv(Config* conf) {
         psvr->wait();
     } while (0);
 
+    psvr->finish();
     delete psvr;
 
     LOG_INFO("ret=%d| end test svr|", ret);
@@ -30,7 +31,7 @@ int testSrv(Config* conf) {
     return ret;
 }
 
-int testCli(Config* conf) {
+static int testCli(Config* conf) {
     int ret = 0;
     GenCli* pcli = NULL;
 
@@ -48,9 +49,36 @@ int testCli(Config* conf) {
         pcli->wait();
     } while (0);
 
+    pcli->finish();
     delete pcli;
 
     LOG_INFO("ret=%d| end test cli|", ret);
+    
+    return ret;
+}
+
+static int testUdp(Config* conf) {
+    int ret = 0;
+    GenUdp* udp = NULL;
+
+    LOG_INFO("test poll|");
+
+    udp = new GenUdp(conf);
+
+    do {
+        ret = udp->init();
+        if (0 != ret) {
+            break;
+        }
+        
+        udp->start();
+        udp->wait();
+    } while (0);
+
+    udp->finish();
+    delete udp;
+
+    LOG_INFO("ret=%d| end test udp|", ret);
     
     return ret;
 }
@@ -90,10 +118,13 @@ int testPoll(int argc, char* argv[]) {
 
     if (0 == opt) {
         ret = testCli(conf);
-    } else {
+    } else if (1 == opt) {
         ret = testSrv(conf);
+    } else if (2 == opt) {
+        ret = testUdp(conf);
     }
 
+    delete conf;
     return ret;
 }
 

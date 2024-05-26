@@ -3,32 +3,25 @@
 #include"shareheader.h" 
 
 
-struct NodeMsg;
+class ITimerCb {
+public:
+    virtual ~ITimerCb() {}
+
+    virtual void onTimerPerSec() = 0;
+};
 
 class ISockBase {
 public:
     virtual ~ISockBase() {}
 
     virtual int parseData(int fd, 
-        const char* buf, int size) = 0;
+        const char* buf, int size, 
+        const SockAddr* addr) = 0;
     
     virtual int process(int hd, NodeMsg* msg) = 0;
     
     virtual void onClose(int hd) = 0; 
-};
-
-struct AccptOption {
-    long m_extra;
-    unsigned m_rd_thresh;
-    unsigned m_wr_thresh;
-    bool m_delay;
-};
-
-struct ConnOption {
-    unsigned m_rd_thresh;
-    unsigned m_wr_thresh;
-    bool m_delay;
-};
+}; 
 
 class ISockSvr : public ISockBase {
 public:

@@ -1,19 +1,17 @@
 #ifndef __MISC_H__
 #define __MISC_H__
-#include"shareheader.h"
+#include"shareheader.h" 
 
-
-typedef void (*PFunSig)(int);
-
-struct ClockTime {
-    unsigned m_sec;
-    unsigned m_msec;
-};
-
-#define INIT_CLOCK_TIME {0,0}
 
 class MiscTool {
 public:
+    static void bzero(void* dst, int size);
+    static void bcopy(void* dst, const void* src, int size);
+    
+    static int strLen(const char* src, int max);
+    static int strCpy(void* dst, const char* src, int max);
+    static int strPrint(void* dst, int max, const char format[], ...);
+    
     static void getTime(ClockTime* ct);
     
     static void getClock(ClockTime* ct);
@@ -46,12 +44,22 @@ public:
     static int getPid();
     static int getFastPid();
 
+    static void sleepSec(int sec);
+
     static int mkDir(const char dir[]);
 
     static void armSig(int sig, PFunSig fn);
     static void raise(int sig);
     static bool isCoreSig(int sig);
     static int maxSig();
+
+    static int setRlimit(EnumResType type, 
+        const unsigned long* softV, 
+        const unsigned long* hardV);
+
+    static int getRlimit(EnumResType type, 
+        unsigned long* softV, 
+        unsigned long* hardV);
 }; 
 
 #endif
