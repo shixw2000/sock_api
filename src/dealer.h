@@ -8,7 +8,6 @@ class ManageCenter;
 class Director;
 class TickTimer;
 class MutexCond;
-class ITimerCb;
 
 class Dealer : public CThread {
     typedef void (Dealer::*PDealFunc)(GenData* data);
@@ -30,10 +29,7 @@ public:
     int activate(GenData* data); 
     int notifyTimer(unsigned tick);
 
-    void setTimerPerSec(ITimerCb* cb);
-
-    static bool dealerTimeoutCb(long p1, 
-        long p2, TimerObj* obj);
+    static bool dealerTimeoutCb(long p1, long p2); 
 
 private:
     void run();
@@ -63,15 +59,17 @@ private:
     void procCmd(NodeMsg* base);
     void cmdRemoveFd(NodeMsg* base); 
     void cmdSchedTask(NodeMsg* base); 
-    
+
     void onAccept(GenData* listenData,
         int newFd, const SockAddr* addr);
 
     void cbTimer1Sec();
     void startTimer1Sec();
     void dealTimeoutCb(GenData* data);
+
+    void closeData(GenData* data);
     
-    static bool dealSecCb(long data1, long, TimerObj*);
+    static bool dealSecCb(long data1, long);
 
 private:
     static PDealFunc m_func[ENUM_DEAL_END];
@@ -84,8 +82,7 @@ private:
     ManageCenter* m_center;
     Director* m_director;
     TickTimer* m_timer;
-    TimerObj* m_1sec_obj;
-    ITimerCb* m_timer_cb;
+    TimerObj m_1sec_obj; 
 };
 
 #endif

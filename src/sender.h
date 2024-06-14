@@ -7,7 +7,6 @@
 
 
 struct pollfd;
-struct TimerObj;
 class ManageCenter;
 class Director;
 class TickTimer;
@@ -34,8 +33,7 @@ public:
     int notifyTimer(unsigned tick); 
     int activate(GenData* data);
 
-    static bool sendTimeoutCb(long p1, 
-        long p2, TimerObj* obj);
+    static bool sendTimeoutCb(long p1, long p2);
 
 private:
     void run();
@@ -94,7 +92,7 @@ private:
 
     void cbTimer1Sec();
     void startTimer1Sec();
-    static bool sendSecCb(long data1, long, TimerObj*); 
+    static bool sendSecCb(long data1, long); 
 
 private:
     static PWrFunc m_func[ENUM_WR_END];
@@ -110,7 +108,7 @@ private:
     ManageCenter* m_center;
     Director* m_director;
     TickTimer* m_timer;
-    TimerObj* m_1sec_obj;
+    TimerObj m_1sec_obj;
     int m_ev_fd[2];
 };
 

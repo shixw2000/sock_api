@@ -8,20 +8,27 @@
 #include"socktool.h"
  
 
+NodeMsg* MsgTool::allocNode(int prelen) {
+    NodeMsg* pb = NULL;
+
+    pb = NodeUtil::creatNode(prelen);
+    return pb;
+}
+
 NodeMsg* MsgTool::allocMsg(int size, int prelen) {
     NodeMsg* pb = NULL;
-    Cache* cache = NULL;
+    Buffer* buffer = NULL;
     char* psz = NULL;
+    bool bOk = false;
 
     pb = NodeUtil::creatNode(prelen); 
     if (NULL != pb) {
-        cache =CacheUtil::alloc(size);
-        if (NULL != cache) {
-            psz = CacheUtil::data(cache); 
+        buffer = NodeUtil::getBuffer(pb);
+        
+        bOk = CacheUtil::allocBuffer(buffer, size);
+        if (bOk) {
+            psz = CacheUtil::origin(buffer); 
             MiscTool::bzero(psz, size);
-            
-            NodeUtil::setCache(pb, ENUM_NODE_INFR,
-                cache, size);
         } else {
             NodeUtil::freeNode(pb);
             pb = NULL;
@@ -39,103 +46,100 @@ NodeMsg* MsgTool::refNodeMsg(NodeMsg* pb, int prelen) {
     return NodeUtil::refNode(pb, prelen);
 }
 
-void MsgTool::setInfraCb(NodeMsg* pb, PFree pf) {
-    Cache* cache = NULL;
+void MsgTool::setCb(NodeMsg* pb, PFree pf, bool ext) {
+    Buffer* buffer = NULL;
 
-    cache = NodeUtil::getCache(pb, ENUM_NODE_INFR);
-    if (NULL != cache) {
-        CacheUtil::setCb(cache, pf);
+    buffer = NodeUtil::getBuffer(pb, ext);
+    if (NULL != buffer->m_cache) {
+        CacheUtil::setCb(buffer->m_cache, pf);
     }
 }
 
-char* MsgTool::getMsg(NodeMsg* pb) {
-    Cache* cache = NULL;
-    char* psz = NULL;
+char* MsgTool::getMsg(NodeMsg* pb, bool ext) {
+    Buffer* buffer = NULL;
 
-    cache = NodeUtil::getCache(pb, ENUM_NODE_INFR);
-    if (NULL != cache) {
-        psz = CacheUtil::data(cache);
-    }
-    
-    return psz;
+    buffer = NodeUtil::getBuffer(pb, ext);
+    return CacheUtil::origin(buffer);
 }
 
-char* MsgTool::getExtraMsg(NodeMsg* pb) {
-    Cache* cache = NULL;
-    char* psz = NULL;
+char* MsgTool::getCurr(NodeMsg* pb, bool ext) {
+    Buffer* buffer = NULL;
 
-    cache = NodeUtil::getCache(pb, ENUM_NODE_VAR);
-    if (NULL != cache) {
-        psz = CacheUtil::data(cache);
-    }
-    
-    return psz;
+    buffer = NodeUtil::getBuffer(pb, ext);
+    return CacheUtil::curr(buffer);
 } 
 
 bool MsgTool::completedMsg(NodeMsg* pb) {
-    return NodeUtil::isCompleted(pb, ENUM_NODE_INFR)
-        && NodeUtil::isCompleted(pb, ENUM_NODE_VAR);
+    return NodeUtil::isCompleted(pb);
 }
 
 char* MsgTool::getPreNode(NodeMsg* pb, int preLen) {
     return NodeUtil::getPreNode(pb, preLen);
 }
 
-void MsgTool::setMsgSize(NodeMsg* pb, int size) {
-    NodeUtil::setSize(pb, ENUM_NODE_INFR, size); 
+void MsgTool::setMsgSize(NodeMsg* pb, int size, bool ext) {
+    Buffer* buffer = NULL;
+
+    buffer = NodeUtil::getBuffer(pb, ext); 
+    CacheUtil::setSize(buffer, size); 
 }
 
-int MsgTool::getMsgSize(NodeMsg* pb) {
-    return NodeUtil::getSize(pb, ENUM_NODE_INFR);
+int MsgTool::getMsgSize(NodeMsg* pb, bool ext) {
+    Buffer* buffer = NULL;
+
+    buffer = NodeUtil::getBuffer(pb, ext);
+    return buffer->m_size;
 }
 
-int MsgTool::getMsgPos(NodeMsg* pb) {
-    return NodeUtil::getPos(pb, ENUM_NODE_INFR);
+int MsgTool::getMsgPos(NodeMsg* pb, bool ext) {
+    Buffer* buffer = NULL;
+
+    buffer = NodeUtil::getBuffer(pb, ext);
+    return buffer->m_pos;
 }
 
-void MsgTool::setMsgPos(NodeMsg* pb, int pos) {
-    NodeUtil::setPos(pb, ENUM_NODE_INFR, pos);
+void MsgTool::setMsgPos(NodeMsg* pb, int pos, bool ext) {
+    Buffer* buffer = NULL;
+
+    buffer = NodeUtil::getBuffer(pb, ext); 
+    CacheUtil::setPos(buffer, pos); 
 }
 
-void MsgTool::skipMsgPos(NodeMsg* pb, int pos) {
-    NodeUtil::skipPos(pb, ENUM_NODE_INFR, pos);
+void MsgTool::skipMsgPos(NodeMsg* pb, int pos, bool ext) {
+    Buffer* buffer = NULL;
+
+    buffer = NodeUtil::getBuffer(pb, ext); 
+    CacheUtil::skipPos(buffer, pos);
 } 
 
-void MsgTool::setExtraCache(NodeMsg* pb, 
-    Cache* cache, int size) {
-    NodeUtil::setCache(pb, ENUM_NODE_VAR, cache, size);
+Buffer* MsgTool::getBuffer(NodeMsg* pb, bool ext) {
+    Buffer* buffer = NULL;
+
+    buffer = NodeUtil::getBuffer(pb, ext);
+    return buffer;
 }
 
-Cache* MsgTool::getExtraCache(NodeMsg* pb) {
-    return NodeUtil::getCache(pb, ENUM_NODE_VAR);
-}
-       
-void MsgTool::setExtraSize(NodeMsg* pb, int size) {
-    NodeUtil::setSize(pb, ENUM_NODE_VAR, size); 
+void MsgTool::flip(NodeMsg* pb, bool ext) {
+    Buffer* buffer = NULL;
+
+    buffer = NodeUtil::getBuffer(pb, ext);
+    CacheUtil::flip(buffer);
 }
 
-int MsgTool::getExtraSize(NodeMsg* pb) {
-    return NodeUtil::getSize(pb, ENUM_NODE_VAR);
-}
+void MsgTool::setCache(NodeMsg* pb, 
+    Cache* cache, int size, bool ext) {
+    Buffer* buffer = NULL;
 
-int MsgTool::getExtraPos(NodeMsg* pb) {
-    return NodeUtil::getPos(pb, ENUM_NODE_VAR);
-}
+    buffer = NodeUtil::getBuffer(pb, ext); 
+    CacheUtil::setCache(buffer, cache);
+    CacheUtil::setSize(buffer, size); 
+} 
 
-void MsgTool::setExtraPos(NodeMsg* pb, int pos) {
-    NodeUtil::setPos(pb, ENUM_NODE_VAR, pos);
-}
+int MsgTool::getLeft(NodeMsg* pb, bool ext) {
+    Buffer* buffer = NULL;
 
-void MsgTool::skipExtraPos(NodeMsg* pb, int pos) {
-    NodeUtil::skipPos(pb, ENUM_NODE_VAR, pos);
-}
-
-int MsgTool::getLeft(NodeMsg* pb) {
-    return NodeUtil::getLeft(pb, ENUM_NODE_INFR);
-}
-
-int MsgTool::getExtraLeft(NodeMsg* pb) {
-    return NodeUtil::getLeft(pb, ENUM_NODE_VAR);
+    buffer = NodeUtil::getBuffer(pb, ext); 
+    return CacheUtil::leftLen(buffer);
 }
 
 NodeMsg* MsgTool::allocUdpMsg(int size) {

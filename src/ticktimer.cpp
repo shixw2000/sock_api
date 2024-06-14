@@ -4,9 +4,12 @@
 #include"shareheader.h"
 #include"cache.h"
 #include"misc.h"
+#include"lock.h"
 
 
 TickTimer::TickTimer() {
+    m_lock = NULL;
+    
     m_tick = 0;
 
     MiscTool::bzero(m_tv1, sizeof(m_tv1));
@@ -36,11 +39,10 @@ void TickTimer::cascade(HRoot tv[], int index, int level) {
     }
 } 
 
-void TickTimer::tick() {
+void TickTimer::tick(HRoot* list) {
     int slot1 = 0;
     int slot2 = 0;
     int slot3 = 0;
-    HRoot list = INIT_HLIST_HEAD; 
 
     ++m_tick;
 
@@ -55,49 +57,78 @@ void TickTimer::tick() {
     } 
 
     if (!hlistEmpty(&m_tv1[slot1])) {
-        hlistReplace(&list, &m_tv1[slot1]); 
-
-        doTimers(&list);
-    } 
-}
-
-void TickTimer::doTimer(TimerObj* ele) {
-    bool bOk = false;
-    
-    bOk = ele->func(ele->m_data, ele->m_data2, ele);
-    if (bOk && 0 < ele->m_interval) {
-        _schedule(ele, ele->m_interval);
+        hlistReplace(list, &m_tv1[slot1]); 
     }
 }
 
 void TickTimer::doTimers(HRoot* list) {
     TimerObj* ele = NULL;
     HList* first = NULL;
+    bool bOk = false; 
     
     /* just here, need do like this for the most safe rule */
     while (!hlistEmpty(list)) {
         first = hlistFirst(list);
         hlistDel(first); 
-
-        ele = CONTAINER(first, TimerObj, m_node); 
         
-        doTimer(ele);
+        unlock();
+
+        /* do business out of lock */
+        ele = CONTAINER(first, TimerObj, m_node); 
+        if (NULL != ele->func) {
+            bOk = ele->func(ele->m_data, ele->m_data2);
+        } else {
+            bOk = false;
+        }
+        lock(); 
+        
+        if (bOk && 0 < ele->m_interval) {
+            _schedule(ele, ele->m_interval);
+        }
     } 
 }
 
 void TickTimer::run(unsigned tm) {
+    HRoot list = INIT_HLIST_HEAD;
+  
+    lock();
+    
     m_now += tm;
+    tick(&list);
 
-    tick();
+    if (!hlistEmpty(&list)) {
+        doTimers(&list);
+    }
+    
+    unlock();
 }
 
-void TickTimer::schedule(TimerObj* ele, unsigned delay, unsigned interval) { 
+void TickTimer::startTimer(TimerObj* ele, 
+    unsigned delay, unsigned interval) { 
     if (0 == delay) {
         delay = 1;
+    }
+
+    lock();
+    ele->m_interval = interval;
+    _schedule(ele, delay);
+    unlock();
+}
+
+void TickTimer::restartTimer(TimerObj* ele, 
+    unsigned delay, unsigned interval) { 
+    if (0 == delay) {
+        delay = 1;
+    }
+
+    lock();
+    if (!hlistUnhashed(&ele->m_node)) {
+        hlistDel(&ele->m_node);
     }
     
     ele->m_interval = interval;
     _schedule(ele, delay);
+    unlock();
 }
 
 void TickTimer::_schedule(TimerObj* ele, unsigned delay) {  
@@ -125,37 +156,40 @@ void TickTimer::_schedule(TimerObj* ele, unsigned delay) {
     } 
 }
 
-void TickTimer::delTimer(TimerObj* ele) {
-    if (!hlistUnhashed(&ele->m_node)) {
-        hlistDel(&ele->m_node);
-    }
-}
-
 void TickTimer::initObj(TimerObj* ele) {
     MiscTool::bzero(ele, sizeof(TimerObj));
 }
 
 void TickTimer::setTimerCb(TimerObj* ele, 
-    TFunc func, long data, long data2) {
+    TimerFunc func, long data, long data2) {
     ele->func = func;
     ele->m_data = data;
     ele->m_data2 = data2;
 }
 
-TimerObj* TickTimer::allocObj() {
-    TimerObj* obj = NULL;
-
-    obj = (TimerObj*)CacheUtil::mallocAlign(sizeof(TimerObj));
-    if (NULL != obj) {
-        initObj(obj);
+void TickTimer::stopTimer(TimerObj* ele) {
+    lock();
+    
+    if (!hlistUnhashed(&ele->m_node)) {
+        hlistDel(&ele->m_node);
     }
     
-    return obj;
+    unlock();
 }
 
-void TickTimer::freeObj(TimerObj* obj) {
-    if (NULL != obj) {
-        CacheUtil::freeAlign(obj);
+void TickTimer::setLock(Lock* lock) {
+    m_lock = lock;
+}
+
+void TickTimer::lock() {
+    if (NULL != m_lock) {
+        m_lock->lock();
+    }
+}
+
+void TickTimer::unlock() {
+    if (NULL != m_lock) {
+        m_lock->unlock();
     }
 }
 

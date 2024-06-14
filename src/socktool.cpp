@@ -341,7 +341,6 @@ int SockTool::openMultiUdp(int* pfd, int port,
     const char my_ip[], const char multi_ip[]) {
     int ret = 0;
     int fd = -1;
-    bool added = false;
     SockName name;
 
     do {
@@ -356,22 +355,11 @@ int SockTool::openMultiUdp(int* pfd, int port,
             break;
         }
 
-        added = true;
-        
-        ret = blockSrcInMulti(fd, my_ip, multi_ip, my_ip);
-        if (0 != ret) {
-            break;
-        }
-
         *pfd = fd;
         return ret;
     } while (false);
 
-    if (0 <= fd) {
-        if (added) {
-            dropMultiMem(fd, my_ip, multi_ip);
-        }
-        
+    if (0 <= fd) { 
         closeSock(fd);
     }
 

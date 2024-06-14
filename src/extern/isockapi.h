@@ -3,13 +3,6 @@
 #include"shareheader.h" 
 
 
-class ITimerCb {
-public:
-    virtual ~ITimerCb() {}
-
-    virtual void onTimerPerSec() = 0;
-};
-
 class ISockBase {
 public:
     virtual ~ISockBase() {}

@@ -169,7 +169,7 @@ int SockFrame::dispatch(int fd, NodeMsg* pMsg) {
 
 void SockFrame::closeData(int fd) {
     if (chkValid()) {
-        m_intern->director.notifyClose(fd);
+        m_intern->director.closeData(fd);
     }
 }
 
@@ -220,20 +220,53 @@ int SockFrame::creatCli(const char szIP[],
     }
 }
 
-int SockFrame::schedule(unsigned delay, 
-    unsigned interval, TimerFunc func, 
-    long data, long data2) {
+unsigned SockFrame::now() const {
     if (chkValid()) {
-        return m_intern->director.schedule(delay, 
-            interval, func, data, data2);
+        return m_intern->director.now();
     } else {
-        return -1;
+        return 0;
     }
 }
 
-void SockFrame::setTimerPerSec(ITimerCb* cb) {
+void SockFrame::startTimer(TimerObj* ele, 
+    unsigned delay_sec, unsigned interval_sec) {
     if (chkValid()) {
-        return m_intern->director.setTimerPerSec(cb);
+        m_intern->director.startTimer(
+            ele, delay_sec, interval_sec);
+    }
+}
+
+void SockFrame::restartTimer(TimerObj* ele, 
+    unsigned delay_sec, unsigned interval_sec) {
+    if (chkValid()) {
+        m_intern->director.restartTimer(
+            ele, delay_sec, interval_sec);
+    }
+}
+
+void SockFrame::stopTimer(TimerObj* ele) {
+    if (chkValid()) {
+        m_intern->director.stopTimer(ele);
+    }
+}
+
+void SockFrame::setParam(TimerObj* ele, TimerFunc cb, 
+    long data, long data2) {
+    if (chkValid()) {
+        m_intern->director.setParam(ele, cb, data, data2);
+    }
+}
+
+TimerObj* SockFrame::allocTimer() {
+    if (chkValid()) {
+        return m_intern->director.allocTimer();
+    } else {
+        return NULL;
+    }
+}
+void SockFrame::freeTimer(TimerObj* ele) {
+    if (chkValid()) {
+        m_intern->director.freeTimer(ele);
     }
 }
 

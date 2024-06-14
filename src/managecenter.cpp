@@ -56,13 +56,11 @@ struct GenData {
 
 
 ManageCenter::ManageCenter(int cap) 
-    : m_cap(0 < cap ? cap : MAX_FD_NUM),
-    m_timer_cap(MAX_FD_NUM){
+    : m_cap(0 < cap ? cap : MAX_FD_NUM) {
     initQue(&m_pool);
     m_lock = NULL;
     m_cache = NULL;
     m_datas = NULL;
-    m_timer_objs = NULL;
 
     m_conn_timeout = DEF_CONN_TIMEOUT_TICK;
     m_rd_timeout = DEF_RDWR_TIMEOUT_TICK;
@@ -83,18 +81,10 @@ int ManageCenter::init() {
     m_datas = (GenData**)CacheUtil::callocAlign(
         m_cap, sizeof(GenData*));
 
-    m_timer_objs = (TimerObj*)CacheUtil::callocAlign(
-        m_timer_cap, sizeof(TimerObj));
-    
     creatQue(&m_pool, m_cap);
-    creatQue(&m_timer_pool, m_timer_cap);
     
     for (int i=0; i<m_cap; ++i) {
         push(&m_pool, &m_cache[i]);
-    }
-
-    for (int i=0; i<m_timer_cap; ++i) {
-        push(&m_timer_pool, &m_timer_objs[i]);
     }
 
     return ret;
@@ -102,7 +92,6 @@ int ManageCenter::init() {
 
 void ManageCenter::finish() {
     finishQue(&m_pool);
-    finishQue(&m_timer_pool);
     
     if (NULL != m_datas) {
         CacheUtil::freeAlign(m_datas);
@@ -114,12 +103,6 @@ void ManageCenter::finish() {
         CacheUtil::freeAlign(m_cache);
 
         m_cache = NULL;
-    } 
-
-    if (NULL != m_timer_objs) {
-        CacheUtil::freeAlign(m_timer_objs);
-
-        m_timer_objs = NULL;
     }
 
     if (NULL != m_lock) {
@@ -134,32 +117,6 @@ void ManageCenter::lock() {
 
 void ManageCenter::unlock() {
     m_lock->unlock();
-}
-
-TimerObj* ManageCenter::allocTimer() {
-    bool bOk = false;
-    void* ele = NULL;
-    TimerObj* obj = NULL;
-    
-    lock();
-    bOk = pop(&m_timer_pool, &ele);
-    unlock();
-
-    if (bOk) {
-        obj = reinterpret_cast<TimerObj*>(ele);
-    }
-
-    return obj;
-}
-
-void ManageCenter::freeTimer(TimerObj* obj) {
-    if (NULL != obj) { 
-        TickTimer::initObj(obj);
-        
-        lock();
-        push(&m_timer_pool, obj);
-        unlock();
-    }
 }
 
 void ManageCenter::_allocData(GenData* obj) { 
@@ -217,29 +174,14 @@ bool ManageCenter::isClosed(GenData* data) const {
 
 bool ManageCenter::markClosed(GenData* data) {
     bool close = false;
-    
+
     lock();
     close = !data->m_closing;
     ++data->m_closing;
     unlock();
-
+    
     return close;
 } 
-
-bool ManageCenter::markClosed(int fd) {
-    GenData* data = NULL;
-    bool close = false;
-    
-    lock();
-    if (0 < fd && m_cap > fd && NULL != m_datas[fd]) {
-        data = m_datas[fd];
-        close = !data->m_closing;
-        ++data->m_closing;
-    }
-    unlock();
-
-    return close;
-}
 
 long ManageCenter::getExtra(const GenData* data) {
     return data->m_extra;
@@ -408,27 +350,41 @@ void ManageCenter::delNode(EnumDir enDir, GenData* data) {
     }
 }
 
-void ManageCenter::enableTimer(EnumDir enDir, 
+void ManageCenter::startTimer(EnumDir enDir, 
     TickTimer* timer, GenData* data, int event, 
     unsigned delay) { 
     TimerEle* ele = &data->m_timer_ele[enDir];
 
     ele->m_event = event;
     if (0 == delay) {
-        timer->schedule(&ele->m_timer, ele->m_timeout_thresh);
+        timer->startTimer(&ele->m_timer, ele->m_timeout_thresh);
     } else {
-        timer->schedule(&ele->m_timer, delay);
+        timer->startTimer(&ele->m_timer, delay);
     }
 } 
 
-void ManageCenter::cancelTimer(EnumDir enDir, GenData* data) {
+void ManageCenter::restartTimer(EnumDir enDir, 
+    TickTimer* timer, GenData* data, int event, 
+    unsigned delay) { 
     TimerEle* ele = &data->m_timer_ele[enDir];
 
-    TickTimer::delTimer(&ele->m_timer);
+    ele->m_event = event;
+    if (0 == delay) {
+        timer->restartTimer(&ele->m_timer, ele->m_timeout_thresh);
+    } else {
+        timer->restartTimer(&ele->m_timer, delay);
+    }
+}
+
+void ManageCenter::cancelTimer(EnumDir enDir, 
+    TickTimer* timer, GenData* data) {
+    TimerEle* ele = &data->m_timer_ele[enDir];
+
+    timer->stopTimer(&ele->m_timer);
 }
 
 void ManageCenter::setTimerParam(EnumDir enDir, 
-    GenData* data, TFunc func, long param1) {
+    GenData* data, TimerFunc func, long param1) {
     TimerEle* ele = &data->m_timer_ele[enDir];
 
     TickTimer::setTimerCb(&ele->m_timer, 
@@ -615,50 +571,49 @@ GenData* ManageCenter::reg(int fd) {
     bool bOk = false;
 
     if (0 < fd && fd < m_cap) {
+        lock();
         if (NULL == m_datas[fd]) {
-            lock();
-            bOk = pop(&m_pool, &ele);
-            unlock();
-
+            bOk = pop(&m_pool, &ele); 
             if (bOk) { 
                 data = reinterpret_cast<GenData*>(ele); 
-            
-                _allocData(data);
-                
-                data->m_fd = fd; 
-                m_datas[fd] = data;
-                
-                return data;
+                m_datas[fd] = data; 
             } 
+        } 
+        unlock();
+
+        if (bOk) {
+            _allocData(data);
+            data->m_fd = fd; 
+            
+            return data;
         } else {
-            LOG_WARN("reg_fd| fd=%d| capacity=%d| slot=%p|"
+            LOG_WARN("reg_fd| fd=%d| capacity=%d|"
                 " msg=busy fd|",
-                fd, m_cap, m_datas[fd]);
-        }
+                fd, m_cap);
+            return NULL;
+        } 
     } else {
         LOG_WARN("reg_fd| fd=%d| capacity=%d|"
             " msg=invalid fd|",
             fd, m_cap);
-    }
-
-    return NULL;
+        return NULL;
+    } 
 } 
 
 bool ManageCenter::unreg(GenData* data) {
     int fd = data->m_fd;
     
-    if (exists(fd) && data == m_datas[fd]) {
-        m_datas[fd] = NULL;
-
+    if (0 < fd && fd < m_cap && data == m_datas[fd]) {
         LOG_INFO("fd=%d| addr=%s:%d| cnt=%u| msg=closed|", 
             fd, data->m_szIP, data->m_port, 
-            data->m_closing); 
-        
-        data->m_fd = -100000;
+            data->m_closing);
         
         _releaseData(data);
-
+        
         lock();
+        m_datas[fd] = NULL;
+        data->m_fd = -100000;
+
         push(&m_pool, data);
         unlock(); 
 
@@ -751,30 +706,24 @@ int ManageCenter::onRecv(GenData* data,
     return ret;
 }
 
-GenData* ManageCenter::onNewSock(GenData* parent,
-    int newFd, AccptOption& opt) {
-    GenData* child = NULL;
+int ManageCenter::onNewSock(GenData* newData,
+    GenData* parent, AccptOption& opt) {
     ISockSvr* svr = NULL;
     int ret = 0; 
     int listenFd = getFd(parent);
+    int newFd = getFd(newData);
 
     svr = dynamic_cast<ISockSvr*>(parent->m_sock);
     if (NULL != svr) { 
-        child = reg(newFd);
-        if (NULL != child) {
-            ret = svr->onNewSock(listenFd, newFd, opt);
-            if (0 == ret) { 
-                setData(child, svr, opt.m_extra);
-
-                return child;
-            } else {
-                unreg(child);
-                child = NULL;
-            }
-        } 
+        ret = svr->onNewSock(listenFd, newFd, opt);
+        if (0 == ret) { 
+            setData(newData, svr, opt.m_extra);
+        }
+    } else {
+        ret = -1;
     }
 
-    return child;
+    return ret;
 }
 
 int ManageCenter::onConnect(GenData* data, 

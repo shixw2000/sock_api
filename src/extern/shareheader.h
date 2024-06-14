@@ -96,5 +96,11 @@ struct ConnOption {
     bool m_delay;
 };
 
+struct Buffer {
+    Cache* m_cache;
+    int m_size;
+    int m_pos;
+};
+
 #endif
 

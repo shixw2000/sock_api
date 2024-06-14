@@ -33,11 +33,13 @@ int GenSockProto::parseData2(int fd,
     char* psz = NULL; 
 
     pMsg = MsgTool::allocMsg(size);
-    psz = MsgTool::getMsg(pMsg);
+    psz = MsgTool::getCurr(pMsg);
 
     MiscTool::bcopy(psz, buf, size); 
 
     MsgTool::skipMsgPos(pMsg, size);
+    MsgTool::flip(pMsg);
+    
     dispatch(fd, pMsg);
 
     return 0; 
@@ -74,7 +76,7 @@ bool GenSockProto::analyseHead(SockBuffer* buffer) {
     size = ph->m_size;
     if (DEF_MSG_HEAD_SIZE < size && size < MAX_MSG_SIZE) {
         pMsg = MsgTool::allocMsg(size);
-        psz = MsgTool::getMsg(pMsg);
+        psz = MsgTool::getCurr(pMsg);
 
         MiscTool::bcopy(psz, buffer->m_head, DEF_MSG_HEAD_SIZE); 
 
@@ -120,37 +122,35 @@ int GenSockProto::parseHead(SockBuffer* buffer,
 
 int GenSockProto::parseBody(int fd, 
     SockBuffer* buffer, const char* input, int len) {
-    int size = 0;
-    int pos = 0;
+    int left = 0;
     int used = 0;
     NodeMsg* pMsg = NULL;
     char* psz = NULL;
 
     pMsg = buffer->m_msg;
     
-    size = MsgTool::getMsgSize(pMsg);
-    pos = MsgTool::getMsgPos(pMsg);
-    psz = MsgTool::getMsg(pMsg);
+    left = MsgTool::getLeft(pMsg);
+    psz = MsgTool::getCurr(pMsg);
     
-    psz += pos;
-    size -= pos;
-    if (size <= len) {
+    if (left <= len) {
         /* get a completed msg */
-        MiscTool::bcopy(psz, input, size);
+        MiscTool::bcopy(psz, input, left);
 
-        MsgTool::skipMsgPos(pMsg, size);
-        used += size; 
+        MsgTool::skipMsgPos(pMsg, left);
+        MsgTool::flip(pMsg);
+        
+        used += left; 
 
-        LOG_DEBUG("parse_msg| fd=%d| len=%d| size=%d| pos=%d|",
-            fd, len, size, pos);
+        LOG_DEBUG("parse_msg| fd=%d| len=%d| left=%d|",
+            fd, len, left);
 
         /* dispatch a completed msg */
         dispatch(fd, pMsg);
         buffer->m_msg = NULL;
         buffer->m_pos = 0;
     } else {
-        LOG_DEBUG("skip_msg| fd=%d| len=%d| size=%d| pos=%d|",
-            fd, len, size, pos);
+        LOG_DEBUG("skip_msg| fd=%d| len=%d| left=%d|",
+            fd, len, left);
         
         MiscTool::bcopy(psz, input, len);
 
@@ -308,7 +308,7 @@ void GenSvr::onClose(int hd) {
 int GenSvr::process(int hd, NodeMsg* msg) {
     MsgHead_t* head = NULL;
 
-    head = (MsgHead_t*)MsgTool::getMsg(msg);
+    head = (MsgHead_t*)MsgTool::getCurr(msg);
 
     (void)hd;
     (void)head;
@@ -493,7 +493,7 @@ int GenCli::onConnOK(int hd,
 int GenCli::process(int hd, NodeMsg* msg) {
     MsgHead_t* head = NULL;
 
-    head = (MsgHead_t*)MsgTool::getMsg(msg);
+    head = (MsgHead_t*)MsgTool::getCurr(msg);
 
     (void)hd;
     (void)head;
@@ -521,13 +521,20 @@ long GenCli::genExtra() {
     return (long)cache;
 }
 
+static bool _timerOneSec(long p1, long) {
+    GenUdp* udp = (GenUdp*)p1;
+
+    udp->onTimerPerSec();
+    return true;
+}
 
 GenUdp::GenUdp(Config* conf) : m_conf(conf) {
     SockFrame::creat();
     
     m_frame = SockFrame::instance();
 
-    m_udp_fd = -1;
+    m_timer_obj = NULL;
+    m_udp_fd = 0;
     
     m_rd_thresh = 0;
     m_wr_thresh = 0;
@@ -537,7 +544,7 @@ GenUdp::GenUdp(Config* conf) : m_conf(conf) {
     m_pkg_size = 0;
 
     m_is_recv = 1;
-    m_now = 0;
+    m_is_multicast = false;
 }
 
 GenUdp::~GenUdp() {
@@ -633,22 +640,30 @@ int GenUdp::init() {
         CHK_RET(ret);
     }
 
-    m_frame->setTimerPerSec(this);
+    m_timer_obj = m_frame->allocTimer();
+    m_frame->setParam(m_timer_obj, &_timerOneSec,
+        (long)this);
     
     return ret;
 }
 
 void GenUdp::finish() {
-    if (0 <= m_udp_fd) {
-        if (m_multi_info.m_ip.empty()) {
-            SockTool::closeSock(m_udp_fd);
-        } else {
-            SockTool::closeMultiSock(m_udp_fd,
+    if (NULL != m_timer_obj) {
+        m_frame->freeTimer(m_timer_obj);
+        
+        m_timer_obj = NULL;
+    }
+    
+    if (0 < m_udp_fd) {
+        if (m_is_multicast) {
+            SockTool::dropMultiMem(m_udp_fd,
                 m_uni_info.m_ip.c_str(), 
                 m_multi_info.m_ip.c_str());
         }
 
-        m_udp_fd = -1;
+        SockTool::closeSock(m_udp_fd);
+
+        m_udp_fd = 0;
     }
 }
 
@@ -662,6 +677,7 @@ void GenUdp::start() {
             
         ret = SockTool::openUdpName(&m_udp_fd, uni);
     } else {
+        m_is_multicast = true;
         ret = SockTool::openMultiUdp(&m_udp_fd,
             m_multi_info.m_port,
             m_uni_info.m_ip.c_str(), 
@@ -672,9 +688,9 @@ void GenUdp::start() {
         ret = m_frame->regUdp(m_udp_fd, this, 0);
         if (0 == ret) {
             m_frame->start();
+            m_frame->startTimer(m_timer_obj, 0, 1);
         }
-    }
-    
+    } 
 }
 
 void GenUdp::wait() {
@@ -686,6 +702,13 @@ void GenUdp::stop() {
 }
 
 void GenUdp::onClose(int) {
+    if (m_is_multicast) {
+        SockTool::dropMultiMem(m_udp_fd,
+            m_uni_info.m_ip.c_str(), 
+            m_multi_info.m_ip.c_str());
+    }
+    
+    m_udp_fd = 0;
 }
 
 NodeMsg* GenUdp::genUdpMsg(int size,
@@ -709,8 +732,7 @@ NodeMsg* GenUdp::genUdpMsg(int size,
 void GenUdp::onTimerPerSec() {
     NodeMsg* pMsg = NULL;
     
-    ++m_now;
-    if (!(m_now & 0x7) && !m_is_recv && !m_peer_info.m_ip.empty()) {
+    if (!m_is_recv && !m_peer_info.m_ip.empty()) {
         LOG_INFO("on_timer_per_sec| fd=%d| pkg_size=%d|",
             m_udp_fd, m_pkg_size); 
 
@@ -726,7 +748,7 @@ int GenUdp::process(int hd, NodeMsg* msg) {
     SockName name;
 
     preh = MsgTool::getPreHead<SockAddr>(msg);
-    head = (MsgHead_t*)MsgTool::getMsg(msg);
+    head = (MsgHead_t*)MsgTool::getCurr(msg);
     size = MsgTool::getMsgSize(msg);
 
     SockTool::addr2IP(&name, preh);
@@ -748,12 +770,14 @@ int GenUdp::parseData(int fd, const char* buf, int size,
     if (0 < size) {
         pMsg = MsgTool::creatPreMsg<SockAddr>(size);
         preh = MsgTool::getPreHead<SockAddr>(pMsg);
-        psz = MsgTool::getMsg(pMsg);
+        psz = MsgTool::getCurr(pMsg);
 
         SockTool::setAddr(*preh, *addr);
         MiscTool::bcopy(psz, buf, size); 
 
         MsgTool::skipMsgPos(pMsg, size);
+        
+        MsgTool::flip(pMsg);
         ret = m_frame->dispatch(fd, pMsg);
     }
     

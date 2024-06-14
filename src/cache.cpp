@@ -18,15 +18,15 @@ struct Cache {
     char m_buf[0];
 };
         
-char** CacheUtil::align(char* ptr) {
+void** CacheUtil::align(char* ptr) {
     size_t n = (size_t)ptr;
 
     n = (n + DEF_ALLOC_ALIGN_RES) & DEF_ALLOC_ALIGN_MASK;
-    return (char**)n;
+    return (void**)n;
 }
 
 char* CacheUtil::mallocAlign(int size) {
-    char** pp = NULL;
+    void** pp = NULL;
     char* ptr = NULL; 
 
     if (0 < size) {
@@ -55,12 +55,18 @@ char* CacheUtil::callocAlign(int nmemb, int size) {
 }
 
 void CacheUtil::freeAlign(void* ptr) {
-    char* psz = NULL;
+    void** pp = NULL;
+    char* pb = NULL;
     
     if (NULL != ptr) {
-        psz = ((char**)ptr)[-1];
+        pp = (void**)ptr;
+        pp -= 1;
+        pb = (char*)*pp;
+
+        assert(pb < (char*)ptr && (size_t)((char*)ptr - pb) <
+            (size_t)(sizeof(void*) + DEF_ALLOC_ALIGN));
         
-        free(psz);
+        free(pb);
     }
 }
 
@@ -92,6 +98,7 @@ bool CacheUtil::isValid(Cache* cache) {
             cache, cache->m_cap,
             cache->m_ref,
             (unsigned)cache->m_buf[cache->m_cap]);
+
         return false;
     }
 }
@@ -125,7 +132,7 @@ void CacheUtil::del(Cache* cache) {
 Cache* CacheUtil::realloc(Cache* src, int capacity, int used) {
     Cache* dst = NULL;
 
-    if (capacity > src->m_cap) {
+    if (NULL == src || capacity > src->m_cap) {
         dst = alloc(capacity, src->m_pf);
         if (NULL != dst) {
             if (0 < used) {
@@ -133,20 +140,20 @@ Cache* CacheUtil::realloc(Cache* src, int capacity, int used) {
             }
             
             del(src);
+            return dst;
         } else {
-            /*failed, then do nothing */
+            /* failed */
+            return NULL;
         }
     } else {
-        dst = src;
+        return src;
     }
-
-    return dst;
 }
 
 Cache* CacheUtil::ref(Cache* cache) {
     int ref = 0;
 
-    if (isValid(cache)) {
+    if (NULL != cache && isValid(cache)) {
         ref = ATOMIC_INC_FETCH(&cache->m_ref);
         if (1 < ref) {
             return cache;
@@ -159,7 +166,7 @@ Cache* CacheUtil::ref(Cache* cache) {
 } 
 
 char* CacheUtil::data(Cache* cache) {
-    if (isValid(cache)) {
+    if (NULL != cache && isValid(cache)) {
         return cache->m_buf;
     } else {
         return NULL;
@@ -167,6 +174,94 @@ char* CacheUtil::data(Cache* cache) {
 }
 
 int CacheUtil::capacity(Cache* cache) {
-    return cache->m_cap;
+    if (NULL != cache  && isValid(cache)) {
+        return cache->m_cap;
+    } else {
+        return 0;
+    }
+}
+
+
+bool CacheUtil::isFull(const Buffer* buffer) {
+    return !(buffer->m_pos < buffer->m_size);
+}
+
+int CacheUtil::leftLen(const Buffer* buffer) {
+    if (0 <= buffer->m_pos &&
+        buffer->m_pos < buffer->m_size) {
+        return buffer->m_size - buffer->m_pos;
+    } else {
+        return 0;
+    }
+}
+
+void CacheUtil::initBuffer(Buffer* buffer) {
+    MiscTool::bzero(buffer, sizeof(*buffer));
+}
+
+bool CacheUtil::allocBuffer(Buffer* buffer,
+    int capacity, PFree pf) {
+    Cache* cache = NULL;
+
+    initBuffer(buffer);
+
+    cache = alloc(capacity, pf);
+    if (NULL != cache) {
+        buffer->m_cache = cache;
+        buffer->m_size = capacity;
+
+        return true;
+    } else {
+        return false;
+    }
+}
+
+void CacheUtil::freeBuffer(Buffer* buffer) {
+    if (NULL != buffer->m_cache) {
+        del(buffer->m_cache);
+    }
+
+    MiscTool::bzero(buffer, sizeof(*buffer));
+}
+
+void CacheUtil::flip(Buffer* buffer) {
+    buffer->m_size = buffer->m_pos;
+    buffer->m_pos = 0;
+}
+
+void CacheUtil::setCache(Buffer* buffer, Cache* cache) {
+    freeBuffer(buffer);
+
+    if (NULL != cache) {
+        buffer->m_cache = cache;
+        buffer->m_size = CacheUtil::capacity(cache);
+    }
+}
+
+void CacheUtil::setSize(Buffer* buffer, int size) {
+    buffer->m_size = size;
+}
+
+void CacheUtil::setPos(Buffer* buffer, int pos) {
+    buffer->m_pos = pos;
+}
+
+void CacheUtil::skipPos(Buffer* buffer, int pos) {
+    buffer->m_pos += pos;
+}
+
+char* CacheUtil::origin(Buffer* buffer) {
+    return data(buffer->m_cache);
+}
+
+char* CacheUtil::curr(Buffer* buffer) {
+    char* psz = NULL;
+
+    psz = CacheUtil::data(buffer->m_cache);
+    if (NULL != psz && 0 < buffer->m_pos) {
+        psz += buffer->m_pos;
+    } 
+
+    return psz;
 }
 

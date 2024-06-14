@@ -2,6 +2,11 @@
 #define __CMDCACHE_H__
 
 
+enum EnumNodeType {
+    ENUM_NODE_APP = 0,
+    ENUM_NODE_SOCK_EXIT = 100,
+};
+
 struct NodeMsg; 
 
 class CmdUtil {
@@ -24,6 +29,9 @@ public:
     } 
     
     static int getCmd(NodeMsg* pb);
+
+    static NodeMsg* creatSockExitMsg();
+    static bool isSockExit(NodeMsg* msg);
 
 private:
     static void* getBody(NodeMsg* pb); 

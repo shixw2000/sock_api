@@ -29,9 +29,6 @@ public:
         return m_cap;
     }
 
-    TimerObj* allocTimer();
-    void freeTimer(TimerObj*);
-
     bool updateExpire(EnumDir enDir, GenData* data,
         unsigned now, bool force);
 
@@ -88,7 +85,6 @@ public:
     
     bool isClosed(GenData* data) const;
     bool markClosed(GenData* data);
-    bool markClosed(int fd);
 
     void setData(GenData* data, ISockBase* sock, long extra); 
     
@@ -105,23 +101,28 @@ public:
     void delNode(EnumDir enDir, GenData* data);
     GenData* fromNode(EnumDir enDir, LList* node);
     
-    void enableTimer(EnumDir enDir, TickTimer* timer, 
+    void startTimer(EnumDir enDir, TickTimer* timer, 
+        GenData* data, int event, unsigned delay = 0);
+
+    void restartTimer(EnumDir enDir, TickTimer* timer, 
         GenData* data, int event, unsigned delay = 0);
     
-    void cancelTimer(EnumDir enDir, GenData* data);
+    void cancelTimer(EnumDir enDir, TickTimer* timer,
+        GenData* data);
+    
     void setTimerParam(EnumDir enDir, GenData* data, 
-        TFunc func, long param1);
+        TimerFunc func, long param1);
 
     static int getEvent(EnumDir enDir, GenData* data);
 
     int onRecv(GenData* data, const char* buf,
         int size, const SockAddr* addr);
     
-    GenData* onNewSock(GenData* parentData,
-        int newFd, AccptOption& opt);
+    int onNewSock(GenData* newData,
+        GenData* parent, AccptOption& opt);
     int onConnect(GenData* data, ConnOption& opt);
     int onProcess(GenData* data, NodeMsg* pMsg);
-    void onClose(GenData* data);
+    void onClose(GenData* data); 
     
 private: 
     void _allocData(GenData* obj);
@@ -135,12 +136,9 @@ private:
     
 private:
     const int m_cap;
-    const int m_timer_cap;
     Lock* m_lock; 
-    TimerObj* m_timer_objs;
     GenData* m_cache;
     GenData** m_datas;
-    Queue m_timer_pool;
     Queue m_pool;
     unsigned m_conn_timeout;
     unsigned m_rd_timeout;

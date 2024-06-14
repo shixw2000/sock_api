@@ -14,15 +14,14 @@
 #include"cache.h"
 
 
-bool Sender::sendSecCb(long data1, long, TimerObj*) {
+bool Sender::sendSecCb(long data1, long) {
     Sender* sender = (Sender*)data1;
 
     sender->cbTimer1Sec();
     return true;
 }
 
-bool Sender::sendTimeoutCb(long p1, 
-    long p2, TimerObj*) {
+bool Sender::sendTimeoutCb(long p1, long p2) {
     Sender* sender = (Sender*)p1;
     GenData* data = (GenData*)p2;
 
@@ -44,12 +43,13 @@ Sender::Sender(ManageCenter* center, Director* director) {
     m_timer = NULL;
     m_lock = NULL; 
     m_pfds = NULL;
-    m_1sec_obj = NULL;
 
     initList(&m_wait_queue);
     initList(&m_run_queue);
     initList(&m_priv_run_queue);
     initList(&m_cmd_queue);
+
+    TickTimer::initObj(&m_1sec_obj);
     
     m_ev_fd[0] = m_ev_fd[1] = 0;
     m_busy = false;
@@ -79,8 +79,7 @@ int Sender::init() {
 
     m_timer = new TickTimer;
     
-    m_1sec_obj = TickTimer::allocObj();
-    TickTimer::setTimerCb(m_1sec_obj, &Sender::sendSecCb, (long)this);
+    TickTimer::setTimerCb(&m_1sec_obj, &Sender::sendSecCb, (long)this);
     startTimer1Sec();
 
     m_pfds[0].fd = m_ev_fd[0];
@@ -89,12 +88,7 @@ int Sender::init() {
     return ret;
 }
 
-void Sender::finish() {
-    if (NULL != m_1sec_obj) {
-        TickTimer::freeObj(m_1sec_obj);
-        m_1sec_obj = NULL;
-    }
-    
+void Sender::finish() { 
     if (NULL != m_timer) {
         delete m_timer;
         m_timer = NULL;
@@ -316,6 +310,7 @@ int Sender::addCmd(NodeMsg* pCmd) {
 }
 
 int Sender::sendMsg(int fd, NodeMsg* pMsg) {
+    int stat = 0;
     bool action = false;
     GenData* data = NULL; 
 
@@ -323,8 +318,9 @@ int Sender::sendMsg(int fd, NodeMsg* pMsg) {
 
     if (exists(fd)) {
         data = find(fd); 
+        stat = m_center->getStat(ENUM_DIR_SENDER, data);
         
-        if (!m_center->isClosed(data)) {
+        if (ENUM_STAT_INVALID != stat) {
             lock(); 
             m_center->addMsg(ENUM_DIR_SENDER, data, pMsg);
             action = _queue(data, ENUM_STAT_IDLE); 
@@ -382,11 +378,11 @@ void Sender::cbTimer1Sec() {
 }
 
 void Sender::startTimer1Sec() {
-    m_timer->schedule(m_1sec_obj, 0, DEF_NUM_PER_SEC);
+    m_timer->startTimer(&m_1sec_obj, 0, DEF_NUM_PER_SEC);
 }
 
 void Sender::dealConnCb(GenData* data) { 
-    detach(data, ENUM_STAT_TIMEOUT); 
+    detach(data, ENUM_STAT_DISABLE); 
 
     /* connect timeout */
     m_center->setConnRes(data, -2);
@@ -402,7 +398,7 @@ void Sender::dealTimeoutCb(GenData* data) {
         LOG_INFO("flash_timeout| fd=%d| msg=write close|", 
             m_center->getFd(data));
 
-        detach(data, ENUM_STAT_TIMEOUT); 
+        detach(data, ENUM_STAT_DISABLE); 
         m_director->notifyClose(data);
         break;
 
@@ -427,8 +423,7 @@ void Sender::addFlashTimeout(GenData* data,
     action = m_center->updateExpire(ENUM_DIR_SENDER, 
         data, m_now_sec, force);
     if (action) {
-        m_center->cancelTimer(ENUM_DIR_SENDER, data);
-        m_center->enableTimer(ENUM_DIR_SENDER, m_timer, 
+        m_center->restartTimer(ENUM_DIR_SENDER, m_timer, 
             data, event);
     }
 }
@@ -449,7 +444,7 @@ void Sender::writeDefault(GenData* data) {
         m_center->getStat(ENUM_DIR_SENDER, data), 
         m_center->getCb(ENUM_DIR_SENDER, data));
     
-    detach(data, ENUM_STAT_ERROR);
+    detach(data, ENUM_STAT_INVALID);
     
     m_director->notifyClose(data);
 }
@@ -465,10 +460,10 @@ void Sender::writeConnector(GenData* data) {
         m_center->setConnRes(data, -1);
     } 
 
-    setStat(data, ENUM_STAT_INVALID);
+    setStat(data, ENUM_STAT_DISABLE);
 
     /* delete from timeout */
-    m_center->cancelTimer(ENUM_DIR_SENDER, data);
+    m_center->cancelTimer(ENUM_DIR_SENDER, m_timer, data);
     m_director->activate(ENUM_DIR_DEALER, data);
 }
 
@@ -525,7 +520,7 @@ void Sender::writeSock(GenData* data) {
             setStat(data, ENUM_STAT_BLOCKING);
             m_center->addNode(ENUM_DIR_SENDER, &m_wait_queue, data);
         } else { 
-            detach(data, ENUM_STAT_ERROR); 
+            detach(data, ENUM_STAT_INVALID); 
             m_director->notifyClose(data);
         }
     }
@@ -568,7 +563,7 @@ void Sender::writeUdp(GenData* data) {
             setStat(data, ENUM_STAT_BLOCKING);
             m_center->addNode(ENUM_DIR_SENDER, &m_wait_queue, data);
         } else { 
-            detach(data, ENUM_STAT_ERROR); 
+            detach(data, ENUM_STAT_INVALID); 
             m_director->notifyClose(data);
         }
     }
@@ -588,8 +583,7 @@ void Sender::flowCtl(GenData* data, unsigned total) {
     LOG_DEBUG("==> begin wr flowctl| fd=%d| now=%u| total=%u|",
         m_center->getFd(data), m_timer->now(), total);
 
-    m_center->cancelTimer(ENUM_DIR_SENDER, data);
-    m_center->enableTimer(ENUM_DIR_SENDER, m_timer, data,
+    m_center->restartTimer(ENUM_DIR_SENDER, m_timer, data,
         ENUM_TIMER_EVENT_FLOWCTL,
         DEF_FLOWCTL_TICK_NUM);
     
@@ -644,9 +638,7 @@ void Sender::cmdAddFd(NodeMsg* base) {
         cb = m_center->getCb(ENUM_DIR_SENDER, data);
         stat = m_center->getStat(ENUM_DIR_SENDER, data);
 
-        assert(ENUM_STAT_INVALID == stat);
-        
-        if(ENUM_STAT_INVALID == stat) {
+        if(ENUM_STAT_DISABLE == stat) {
             setStat(data, ENUM_STAT_BLOCKING);
             
             /* first to wait for write */
@@ -667,19 +659,19 @@ void Sender::detach(GenData* data, int stat) {
     m_center->delNode(ENUM_DIR_SENDER, data); 
     unlock();
 
-    m_center->cancelTimer(ENUM_DIR_SENDER, data);
+    m_center->cancelTimer(ENUM_DIR_SENDER, m_timer, data);
 }
 
 void Sender::cmdRemoveFd(NodeMsg* base) { 
-    int fd = -1;
     CmdComm* pCmd = NULL;
     GenData* data = NULL;
     NodeMsg* refCmd = NULL;
+    int fd = 0;
 
     pCmd = CmdUtil::getCmdBody<CmdComm>(base);
     fd = pCmd->m_fd;
     
-    LOG_DEBUG("sender_remove_fd| fd=%d|", fd);
+    LOG_INFO("sender_remove_fd| fd=%d|", fd);
     
     assert(exists(fd));
     if (exists(fd)) { 
@@ -714,7 +706,7 @@ EnumSockRet Sender::sendTcp(int fd,
         cnt = prepareQue(list, iov, MAX_IOVEC_SIZE, max);
 
         ret = SockTool::sendVecUntil(fd, iov, cnt, &sndlen, NULL);
-        if (0 < sndlen) {
+        if (0 <= sndlen) {
             total += sndlen;
             max -= sndlen;
 
@@ -757,7 +749,7 @@ EnumSockRet Sender::sendUdp(int fd,
             cnt = prepareMsg(pMsg, iov, 2, &size);
 
             ret = SockTool::sendVec(fd, iov, cnt, &sndlen, preh);
-            if (0 < sndlen) {
+            if (0 <= sndlen) {
                 total += sndlen;
 
                 done = purgeMsg(pMsg, &sndlen);
@@ -833,18 +825,16 @@ int Sender::prepareMsg(NodeMsg* pMsg,
     struct iovec* iov, int size, int* pmax) {
     char* psz = NULL;
     int left = 0;
-    int pos = 0;
     int len = 0;
     int cnt = 0;
 
     if (cnt < size && 0 < *pmax) {
         left = MsgTool::getLeft(pMsg);
         if (0 < left) {
-            pos = MsgTool::getMsgPos(pMsg);
-            psz = MsgTool::getMsg(pMsg);
+            psz = MsgTool::getCurr(pMsg);
             len = left < *pmax ? left : *pmax; 
                 
-            iov[cnt].iov_base = psz + pos;
+            iov[cnt].iov_base = psz;
             iov[cnt].iov_len = len;
             
             ++cnt;
@@ -852,14 +842,13 @@ int Sender::prepareMsg(NodeMsg* pMsg,
         }
 
         if (cnt < size && 0 < *pmax) {
-            left = MsgTool::getExtraLeft(pMsg);
+            left = MsgTool::getLeft(pMsg, true);
             if (0 < left) {
-                pos = MsgTool::getExtraPos(pMsg);
-                psz = MsgTool::getExtraMsg(pMsg);
+                psz = MsgTool::getCurr(pMsg, true);
 
                 len = *pmax > left ? left : *pmax;
 
-                iov[cnt].iov_base = psz + pos;
+                iov[cnt].iov_base = psz;
                 iov[cnt].iov_len = len;
 
                 ++cnt;
@@ -887,15 +876,15 @@ bool Sender::purgeMsg(NodeMsg* pMsg, int* pmax) {
         }
     }
     
-    left = MsgTool::getExtraLeft(pMsg);
+    left = MsgTool::getLeft(pMsg, true);
     if (0 < left) {
         if (left <= *pmax) {
-            MsgTool::skipExtraPos(pMsg, left); 
+            MsgTool::skipMsgPos(pMsg, left, true); 
             *pmax -= left;
 
             return true;
         } else {
-            MsgTool::skipExtraPos(pMsg, *pmax);
+            MsgTool::skipMsgPos(pMsg, *pmax, true);
             *pmax = 0;
 
             return false;

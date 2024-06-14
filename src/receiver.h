@@ -7,7 +7,6 @@
 
 
 struct pollfd;
-struct TimerObj;
 class ManageCenter;
 class Director;
 class TickTimer;
@@ -31,7 +30,7 @@ public:
     int addCmd(NodeMsg* pCmd);
     int activate(GenData* data);
 
-    static bool recvTimeoutCb(long, long, TimerObj*);
+    static bool recvTimeoutCb(long, long);
 
 private: 
     void run();
@@ -85,7 +84,7 @@ private:
 
     void cbTimer1Sec();
     void startTimer1Sec();
-    static bool recvSecCb(long, long, TimerObj*);
+    static bool recvSecCb(long, long);
     
 
 private:
@@ -99,7 +98,7 @@ private:
     ManageCenter* m_center;
     Director* m_director;
     TickTimer* m_timer;
-    TimerObj* m_1sec_obj;
+    TimerObj m_1sec_obj;
     unsigned m_now_sec;
     int m_size;
     int m_ev_fd[2];

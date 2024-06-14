@@ -14,15 +14,14 @@
 #include"cache.h"
 
 
-bool Receiver::recvSecCb(long data1, long, TimerObj*) {
+bool Receiver::recvSecCb(long data1, long) {
     Receiver* receiver = (Receiver*)data1;
     
     receiver->cbTimer1Sec();
     return true;
 }
 
-bool Receiver::recvTimeoutCb(long p1, 
-    long p2, TimerObj*) {
+bool Receiver::recvTimeoutCb(long p1, long p2) {
     Receiver* receiver = (Receiver*)p1;
     GenData* data = (GenData*)p2;
     
@@ -44,10 +43,10 @@ Receiver::Receiver(ManageCenter* center, Director* director) {
     m_timer = NULL;
     m_lock = NULL;
     m_pfds = NULL;
-    m_1sec_obj = NULL;
 
     initList(&m_run_queue);
     initList(&m_cmd_queue);
+    TickTimer::initObj(&m_1sec_obj);
     
     m_size = 0;
     m_ev_fd[0] = m_ev_fd[1] = 0;
@@ -85,8 +84,8 @@ int Receiver::init() {
     } 
 
     m_timer = new TickTimer; 
-    m_1sec_obj = TickTimer::allocObj();
-    TickTimer::setTimerCb(m_1sec_obj, 
+    
+    TickTimer::setTimerCb(&m_1sec_obj, 
         &Receiver::recvSecCb, (long)this);
     
     startTimer1Sec();
@@ -99,11 +98,6 @@ int Receiver::init() {
 }
 
 void Receiver::finish() { 
-    if (NULL != m_1sec_obj) {
-        TickTimer::freeObj(m_1sec_obj);
-        m_1sec_obj = NULL;
-    }
-    
     if (NULL != m_timer) {
         delete m_timer;
         m_timer = NULL;
@@ -239,8 +233,7 @@ void Receiver::flowCtl(GenData* data, unsigned total) {
     /* disable read */
     _disableFd(data);
 
-    m_center->cancelTimer(ENUM_DIR_RECVER, data);
-    m_center->enableTimer(ENUM_DIR_RECVER, m_timer, data,
+    m_center->restartTimer(ENUM_DIR_RECVER, m_timer, data,
         ENUM_TIMER_EVENT_FLOWCTL,
         DEF_FLOWCTL_TICK_NUM);
         
@@ -253,7 +246,7 @@ void Receiver::readDefault(GenData* data) {
         m_center->getStat(ENUM_DIR_RECVER, data), 
         m_center->getCb(ENUM_DIR_RECVER, data)); 
 
-    detach(data, ENUM_STAT_ERROR);
+    detach(data, ENUM_STAT_INVALID);
     
     _disableFd(data); 
     
@@ -298,7 +291,7 @@ void Receiver::readSock(GenData* data) {
     } else if (ENUM_SOCK_RET_BLOCK == ret) {
         setStat(data, ENUM_STAT_BLOCKING); 
     } else { 
-        detach(data, ENUM_STAT_ERROR);
+        detach(data, ENUM_STAT_INVALID);
         _disableFd(data); 
         
         m_director->notifyClose(data);
@@ -327,7 +320,7 @@ void Receiver::readUdp(GenData* data) {
     } else if (ENUM_SOCK_RET_BLOCK == ret) { 
         setStat(data, ENUM_STAT_BLOCKING);
     } else { 
-        detach(data, ENUM_STAT_CLOSING);
+        detach(data, ENUM_STAT_INVALID);
         _disableFd(data); 
         m_director->notifyClose(data);
     }
@@ -352,7 +345,7 @@ void Receiver::cbTimer1Sec() {
 }
 
 void Receiver::startTimer1Sec() {
-    m_timer->schedule(m_1sec_obj, 0, DEF_NUM_PER_SEC);
+    m_timer->startTimer(&m_1sec_obj, 0, DEF_NUM_PER_SEC);
 }
 
 void Receiver::dealTimeoutCb(GenData* data) { 
@@ -364,7 +357,7 @@ void Receiver::dealTimeoutCb(GenData* data) {
         LOG_INFO("flash_timeout| fd=%d| msg=read close|",
             m_center->getFd(data));
         
-        detach(data, ENUM_STAT_TIMEOUT); 
+        detach(data, ENUM_STAT_DISABLE); 
         _disableFd(data); 
         m_director->notifyClose(data); 
         break;
@@ -388,8 +381,7 @@ void Receiver::addFlashTimeout(
     action = m_center->updateExpire(ENUM_DIR_RECVER, 
         data, m_now_sec, force);
     if (action) {
-        m_center->cancelTimer(ENUM_DIR_RECVER, data);
-        m_center->enableTimer(ENUM_DIR_RECVER, m_timer, 
+        m_center->restartTimer(ENUM_DIR_RECVER, m_timer, 
             data, ENUM_TIMER_EVENT_TIMEOUT);
     }
 }
@@ -495,7 +487,7 @@ void Receiver::detach(GenData* data, int stat) {
     m_center->delNode(ENUM_DIR_RECVER, data); 
     unlock();
 
-    m_center->cancelTimer(ENUM_DIR_RECVER, data);
+    m_center->cancelTimer(ENUM_DIR_RECVER, m_timer, data);
 }
 
 void Receiver::_disableFd(GenData* data) {
@@ -611,20 +603,16 @@ void Receiver::cmdUndelayFd(NodeMsg* base) {
     pCmd = CmdUtil::getCmdBody<CmdComm>(base);
     fd = pCmd->m_fd;
 
-    assert(exists(fd));
-    
     if (exists(fd)) { 
         LOG_DEBUG("undelay_fd| fd=%d|", fd);
         data = find(fd); 
-        index = m_center->getRdIndex(data);
 
-        lock();
+        index = m_center->getRdIndex(data);
         stat = m_center->getStat(ENUM_DIR_RECVER, data);
-        if (ENUM_STAT_DELAY == stat) {
+        if (ENUM_STAT_DISABLE == stat) {
             setStat(data, ENUM_STAT_BLOCKING); 
             m_pfds[index].fd = fd;
         }
-        unlock(); 
     }
 }
 
@@ -644,9 +632,7 @@ void Receiver::_AddFd(NodeMsg* base, bool delay) {
         cb = m_center->getCb(ENUM_DIR_RECVER, data);
         stat = m_center->getStat(ENUM_DIR_RECVER, data);
         
-        assert(ENUM_STAT_INVALID == stat);
-        
-        if(ENUM_STAT_INVALID == stat) {
+        if(ENUM_STAT_DISABLE == stat) {
             
             m_pfds[m_size].events = POLLIN;
             m_pfds[m_size].revents = 0; 
@@ -656,7 +642,6 @@ void Receiver::_AddFd(NodeMsg* base, bool delay) {
                 setStat(data, ENUM_STAT_BLOCKING); 
             } else {
                 m_pfds[m_size].fd = -fd;
-                setStat(data, ENUM_STAT_DELAY);
             }
 
             if (ENUM_RD_SOCK == cb) { 
@@ -671,18 +656,18 @@ void Receiver::_AddFd(NodeMsg* base, bool delay) {
 
 /* the first step of close a fd */
 void Receiver::cmdRemoveFd(NodeMsg* base) { 
-    int fd = -1;
-    int index = -1;
-    int lastFd = -1;
     CmdComm* pCmd = NULL;
     GenData* data = NULL;
     GenData* dataLast = NULL;
     NodeMsg* refCmd = NULL;
+    int fd = -1;
+    int index = -1;
+    int lastFd = -1;
 
     pCmd = CmdUtil::getCmdBody<CmdComm>(base); 
     fd = pCmd->m_fd; 
     
-    LOG_DEBUG("receiver_remove_fd| fd=%d|", fd);
+    LOG_INFO("receiver_remove_fd| fd=%d|", fd);
     
     assert(exists(fd) && MIN_RCV_PFD < m_size);
     

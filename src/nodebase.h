@@ -5,14 +5,7 @@
 struct LList;
 struct NodeMsg;
 struct Cache;
-struct NodeInfo; 
-
-enum EnumNodeType {
-    ENUM_NODE_INFR = 0,
-    ENUM_NODE_VAR,
-
-    ENUM_NODE_TYPE_END
-};
+struct Buffer; 
 
 class NodeUtil {
 public: 
@@ -24,28 +17,16 @@ public:
     
     static char* getPreNode(NodeMsg* pb, int preLen);
 
-    static NodeInfo* getNodeInfo(NodeMsg* pb, int type); 
-    
-    static void setInfo(NodeInfo* pinfo,
-        Cache* cache, int size, int pos = 0);
-    
-    static void setCache(NodeMsg* pb, int type, 
-        Cache* cache, int size); 
-    
-    static void setSize(NodeMsg* pb, int type, int size); 
-    static void setPos(NodeMsg* pb, int type, int pos);
-    static void skipPos(NodeMsg* pb, int type, int pos);
+    static Buffer* getBuffer(NodeMsg* pb, bool ext = false); 
 
-    static Cache* getCache(NodeMsg* pb, int type);
-    static int getSize(NodeMsg* pb, int type);
-    static int getPos(NodeMsg* pb, int type); 
-    static int getLeft(NodeMsg* pb, int type);
-
-    static bool isCompleted(NodeMsg* pb, int type); 
+    static void setNodeType(NodeMsg* pb, int type);
+    static int getNodeType(NodeMsg* pb);
+    
+    static bool isCompleted(NodeMsg* pb);
     
     static void queue(LList* root, NodeMsg* pb);
 
-    static NodeMsg* toNode(LList* node);
+    static NodeMsg* toNode(LList* node); 
 };
 
 #endif

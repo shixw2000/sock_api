@@ -131,7 +131,7 @@ private:
     AddrInfo m_addr;
 };
 
-class GenUdp : public ISockBase, public ITimerCb { 
+class GenUdp : public ISockBase { 
 public:
     GenUdp(Config* conf);
     
@@ -157,9 +157,9 @@ public:
 
 private:
     SockFrame* m_frame;
+    TimerObj* m_timer_obj;
     Config* m_conf;
     int m_udp_fd;
-    unsigned m_now;
     unsigned m_rd_thresh; 
     unsigned m_wr_thresh;
     unsigned m_rd_timeout;
@@ -169,6 +169,7 @@ private:
     int m_log_stdin;
     int m_log_size;
     int m_is_recv;
+    bool m_is_multicast;
     AddrInfo m_uni_info;
     AddrInfo m_multi_info;
     AddrInfo m_peer_info;

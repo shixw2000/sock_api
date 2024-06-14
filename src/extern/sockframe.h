@@ -4,6 +4,8 @@
 #include"shareheader.h" 
 
 
+struct TimerObj;
+
 class SockFrame {
 private:
     struct _intern;
@@ -61,11 +63,22 @@ public:
     int creatCli(const char szIP[], int port,
         ISockCli* base, long data2);
 
-    int schedule(unsigned delay, unsigned interval,
-        TimerFunc func, long data, long data2 = 0);
+    unsigned now() const;
 
-    void setTimerPerSec(ITimerCb* cb);
+    void startTimer(TimerObj* ele, unsigned delay_sec,
+        unsigned interval_sec = 0);
 
+    void restartTimer(TimerObj* ele, unsigned delay_sec,
+        unsigned interval_sec = 0);
+    
+    void stopTimer(TimerObj* ele);
+
+    void setParam(TimerObj* ele, TimerFunc cb, 
+        long data, long data2 = 0);
+    
+    TimerObj* allocTimer();
+    void freeTimer(TimerObj*);
+    
 private:
     _intern* m_intern;
     bool m_bValid;

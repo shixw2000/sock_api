@@ -4,11 +4,11 @@
 #include"isockapi.h"
 
 
-struct TaskData;
 class Receiver;
 class Sender;
 class Dealer;
 class ManageCenter;
+class TimerMng;
 
 class Director {
 public:
@@ -39,16 +39,12 @@ public:
     int regCli(int fd, ISockCli* cli, long data2,
         const char szIP[], int port); 
 
-    void beginSock(GenData* data, 
-        unsigned rd_thresh, 
+    int regSock(int newFd, GenData* parent, const SockAddr* addr);
+
+    void beginSock(GenData* data);
+
+    void activateSock(GenData* data, unsigned rd_thresh, 
         unsigned wr_thresh, bool delay);
-
-    void closeData(GenData* data);
-
-    int schedule(unsigned delay, unsigned interval,
-        TimerFunc func, long data, long data2);
-
-    void setTimerPerSec(ITimerCb* cb);
     
     int sendCommCmd(EnumDir enDir, EnumSockCmd cmd, int fd); 
     int sendCmd(EnumDir enDir, NodeMsg* pCmd);
@@ -57,8 +53,6 @@ public:
     
     int activate(EnumDir enDir, GenData* data);
     int notifyTimer(EnumDir enDir, unsigned tick); 
-    void notifyClose(GenData* data);
-    void notifyClose(int fd);
      
     int getAddr(int fd, int* pPort, char ip[], int max);
     long getExtra(int fd);
@@ -80,17 +74,39 @@ public:
     void setMaxRdTimeout(int fd, unsigned timeout);
     void setMaxWrTimeout(int fd, unsigned timeout);
 
-private: 
-    NodeMsg* creatCmdComm(EnumSockCmd cmd, int fd); 
-    NodeMsg* creatCmdSchedTask(unsigned delay,
-        unsigned interval, TimerFunc func,
-        long data, long data2);
+    void stopSock(GenData* data);
+
+    void notifyClose(GenData* data);
+
+    void closeData(int fd);
+
+    unsigned now() const;
+
+    void startTimer(TimerObj* ele, unsigned delay_sec,
+        unsigned interval_sec = 0);
+
+    void restartTimer(TimerObj* ele, unsigned delay_sec,
+        unsigned interval_sec = 0);
     
+    void stopTimer(TimerObj* ele);
+
+    void setParam(TimerObj* ele, TimerFunc cb, 
+        long data, long data2 = 0);
+    
+    TimerObj* allocTimer();
+    void freeTimer(TimerObj*);
+    
+    void runPerSec();
+
+private: 
+    NodeMsg* creatCmdComm(EnumSockCmd cmd, int fd);
+
 private:
     Receiver* m_receiver;
     Sender* m_sender;
     Dealer* m_dealer;
     ManageCenter* m_center;
+    TimerMng* m_timer_mng;
     int m_fd_max;
 };
 

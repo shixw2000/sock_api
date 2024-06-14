@@ -24,36 +24,33 @@ public:
         return reinterpret_cast<T*>(psz);
     } 
     
+    static NodeMsg* allocNode(int prelen = 0);
+    
     static NodeMsg* allocMsg(int size, int prelen = 0);
     static NodeMsg* refNodeMsg(NodeMsg* pb, int prelen = 0);
     static void freeMsg(NodeMsg* pb);
 
-    static void setInfraCb(NodeMsg* pb, PFree pf);
+    static char* getMsg(NodeMsg* pb, bool ext = false);
+    static char* getCurr(NodeMsg* pb, bool ext = false);
+    static Buffer* getBuffer(NodeMsg* pb, bool ext = false);
+
+    /* set size == pos, and pos = 0 */
+    static void flip(NodeMsg* pb, bool ext = false);
+
+    static void setCache(NodeMsg* pb, Cache* cahe,
+        int size, bool ext = false);
+    static void setCb(NodeMsg* pb, 
+        PFree pf, bool ext = false);
     
-    static char* getMsg(NodeMsg* pb);
-    static char* getExtraMsg(NodeMsg* pb);
+    static void setMsgSize(NodeMsg* pb, int size, bool ext = false);
+    static void setMsgPos(NodeMsg* pb, int pos, bool ext = false);
+    static void skipMsgPos(NodeMsg* pb, int pos, bool ext = false);
+    static int getMsgSize(NodeMsg* pb, bool ext = false); 
+    static int getMsgPos(NodeMsg* pb, bool ext = false);
+    static int getLeft(NodeMsg* pb, bool ext = false);
 
     static bool completedMsg(NodeMsg* pb);
-    
-    static void setMsgSize(NodeMsg* pb, int size);
-    static int getMsgSize(NodeMsg* pb); 
-    static int getMsgPos(NodeMsg* pb);
-    static void setMsgPos(NodeMsg* pb, int pos);
-    static void skipMsgPos(NodeMsg* pb, int pos); 
-
-    static void setExtraCache(NodeMsg* pb, 
-        Cache* cahe, int size);
-    static Cache* getExtraCache(NodeMsg* pb);
-    
-    static void setExtraSize(NodeMsg* pb, int size);
-    static int getExtraSize(NodeMsg* pb); 
-    static int getExtraPos(NodeMsg* pb);
-    static void setExtraPos(NodeMsg* pb, int pos);
-    static void skipExtraPos(NodeMsg* pb, int pos);
-
-    static int getLeft(NodeMsg* pb);
-    static int getExtraLeft(NodeMsg* pb);
-
+  
     static NodeMsg* allocUdpMsg(int size);
     static NodeMsg* refUdpMsg(NodeMsg* msg);
 

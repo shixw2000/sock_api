@@ -13,22 +13,22 @@ struct CmdHead_t {
 
 NodeMsg* CmdUtil::creatNodeCmd(int cmd, int size) {
     NodeMsg* pb = NULL;
-    Cache* cache = NULL;
+    Buffer* buffer = NULL;
     CmdHead_t* ph = NULL;
     int total = sizeof(CmdHead_t) + size;
+    bool bOk = false;
 
     pb = NodeUtil::creatNode(); 
     if (NULL != pb) {
-        cache =CacheUtil::alloc(total);
-        if (NULL != cache) {
-            ph = (CmdHead_t*)CacheUtil::data(cache);
+        buffer = NodeUtil::getBuffer(pb);
+        
+        bOk = CacheUtil::allocBuffer(buffer, total);
+        if (bOk) {
+            ph = (CmdHead_t*)CacheUtil::origin(buffer);
 
             MiscTool::bzero(ph, total);
             ph->m_cmd = cmd;
             ph->m_size = size;
-            
-            NodeUtil::setCache(pb, ENUM_NODE_INFR,
-                cache, size);
         } else {
             NodeUtil::freeNode(pb);
             pb = NULL;
@@ -39,26 +39,39 @@ NodeMsg* CmdUtil::creatNodeCmd(int cmd, int size) {
 }
 
 int CmdUtil::getCmd(NodeMsg* pb) {
-    Cache* cache = NULL;
+    Buffer* buffer = NULL;
     CmdHead_t* ph = NULL;
 
-    cache = NodeUtil::getCache(pb, ENUM_NODE_INFR);
-    if (NULL != cache) {
-        ph = (CmdHead_t*)CacheUtil::data(cache);
-    }
+    buffer = NodeUtil::getBuffer(pb);
+    ph = (CmdHead_t*)CacheUtil::origin(buffer);
     
     return ph->m_cmd;
 } 
 
 void* CmdUtil::getBody(NodeMsg* pb) {
-    Cache* cache = NULL;
+    Buffer* buffer = NULL;
     CmdHead_t* ph = NULL;
 
-    cache = NodeUtil::getCache(pb, ENUM_NODE_INFR);
-    if (NULL != cache) {
-        ph = (CmdHead_t*)CacheUtil::data(cache);
-    }
+    buffer = NodeUtil::getBuffer(pb);
+    ph = (CmdHead_t*)CacheUtil::origin(buffer);
     
     return ph->m_body;
+}
+
+NodeMsg* CmdUtil::creatSockExitMsg() {
+    NodeMsg* msg = NULL;
+    
+    msg = NodeUtil::creatNode(); 
+    NodeUtil::setNodeType(msg, ENUM_NODE_SOCK_EXIT);
+    return msg;
+}
+
+bool CmdUtil::isSockExit(NodeMsg* msg) {
+    if (ENUM_NODE_SOCK_EXIT !=
+        NodeUtil::getNodeType(msg)) {
+        return false;
+    } else {
+        return true;
+    }
 }
 

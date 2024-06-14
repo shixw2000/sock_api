@@ -14,8 +14,7 @@
 #include"isockapi.h"
 
 
-bool Dealer::dealerTimeoutCb(long p1, 
-    long p2, TimerObj*) {
+bool Dealer::dealerTimeoutCb(long p1, long p2) {
     Dealer* dealer = (Dealer*)p1;
     GenData* data = (GenData*)p2;
     
@@ -23,7 +22,7 @@ bool Dealer::dealerTimeoutCb(long p1,
     return false;
 }
 
-bool Dealer::dealSecCb(long data1, long, TimerObj*) {
+bool Dealer::dealSecCb(long data1, long) {
     Dealer* dealer = (Dealer*)data1;
 
     dealer->cbTimer1Sec();
@@ -42,12 +41,13 @@ Dealer::Dealer(ManageCenter* center, Director* director) {
     m_director = director;
     m_timer = NULL;
     m_lock = NULL;
-    m_1sec_obj = NULL;
-    m_timer_cb = NULL;
     
     initList(&m_run_queue);
     initList(&m_run_queue_priv);
     initList(&m_cmd_queue);
+
+    TickTimer::initObj(&m_1sec_obj);
+    
     m_busy = false;
     m_tick = 0;
 }
@@ -61,19 +61,13 @@ int Dealer::init() {
     m_lock = new MutexCond; 
     m_timer = new TickTimer;
     
-    m_1sec_obj = TickTimer::allocObj();
-    TickTimer::setTimerCb(m_1sec_obj, &Dealer::dealSecCb, (long)this);
+    TickTimer::setTimerCb(&m_1sec_obj, &Dealer::dealSecCb, (long)this);
     startTimer1Sec();
     
     return ret;
 }
 
-void Dealer::finish() {
-    if (NULL != m_1sec_obj) {
-        TickTimer::freeObj(m_1sec_obj);
-        m_1sec_obj = NULL;
-    }
-    
+void Dealer::finish() { 
     if (NULL != m_timer) {
         delete m_timer;
         m_timer = NULL;
@@ -95,16 +89,14 @@ void Dealer::stop() {
 
 void Dealer::cbTimer1Sec() {
     unsigned now = m_timer->now();
-
-    if (NULL != m_timer_cb) {
-        m_timer_cb->onTimerPerSec();
-    }
     
     LOG_DEBUG("=======deal_now=%u|", now);
+
+    m_director->runPerSec();
 }
 
 void Dealer::startTimer1Sec() {
-    m_timer->schedule(m_1sec_obj, 0, DEF_NUM_PER_SEC);
+    m_timer->startTimer(&m_1sec_obj, 0, DEF_NUM_PER_SEC);
 }
 
 GenData* Dealer::find(int fd) const {
@@ -210,11 +202,7 @@ int Dealer::notifyTimer(unsigned tick) {
     unlock();
 
     return 0;
-}
-
-void Dealer::setTimerPerSec(ITimerCb* cb) {
-    m_timer_cb = cb;
-}
+} 
 
 int Dealer::addCmd(NodeMsg* pCmd) {
     lock(); 
@@ -247,7 +235,7 @@ void Dealer::detach(GenData* data, int stat) {
     m_center->delNode(ENUM_DIR_DEALER, data); 
     unlock();
 
-    m_center->cancelTimer(ENUM_DIR_DEALER, data);
+    m_center->cancelTimer(ENUM_DIR_DEALER, m_timer, data);
 }
 
 bool Dealer::_queue(GenData* data, int expectStat) {
@@ -269,15 +257,17 @@ bool Dealer::_queue(GenData* data, int expectStat) {
 }
 
 int Dealer::dispatch(int fd, NodeMsg* pMsg) {
-    bool action = false;
     GenData* data = NULL;
+    int stat = 0;
+    bool action = false;
 
     LOG_DEBUG("fd=%d| msg=dispatch msg|", fd);
 
     if (exists(fd)) {
         data = find(fd);
+        stat = m_center->getStat(ENUM_DIR_DEALER, data);
         
-        if (!m_center->isClosed(data)) {
+        if (ENUM_STAT_INVALID != stat) { 
             lock(); 
             m_center->addMsg(ENUM_DIR_DEALER, data, pMsg);
             action = _queue(data, ENUM_STAT_IDLE);
@@ -340,9 +330,9 @@ void Dealer::procDefault(GenData* data) {
         m_center->getStat(ENUM_DIR_DEALER, data),
         m_center->getCb(ENUM_DIR_DEALER, data));
     
-    detach(data, ENUM_STAT_ERROR); 
+    detach(data, ENUM_STAT_INVALID); 
     
-    m_director->notifyClose(data);
+    m_director->stopSock(data);
 }
 
 void Dealer::procMsg(GenData* data) { 
@@ -366,8 +356,8 @@ void Dealer::procMsg(GenData* data) {
                 m_busy = true;
             }
         } else { 
-            detach(data, ENUM_STAT_ERROR); 
-            m_director->notifyClose(data);
+            detach(data, ENUM_STAT_INVALID); 
+            m_director->stopSock(data);
         } 
     }
 }
@@ -380,12 +370,20 @@ int Dealer::dealMsgQue(GenData* data, LList* list) {
     
     for_each_list_safe(node, n, list) {
         pMsg = NodeUtil::toNode(node);
-        del(node);
 
         if (0 == ret && isRun()) {
-            ret = m_center->onProcess(data, pMsg);
-        } 
+            if (!CmdUtil::isSockExit(pMsg)) {
+                ret = m_center->onProcess(data, pMsg);
+            } else {
+                /* receive exit msg */
+                ret = 1;
+                break;
+            }
+        } else {
+            break;
+        }
 
+        del(node);
         NodeUtil::freeNode(pMsg);
     }
 
@@ -401,10 +399,6 @@ void Dealer::procCmd(NodeMsg* pCmd) {
         cmdRemoveFd(pCmd);
         break;
 
-    case ENUM_CMD_SCHED_TASK:
-        cmdSchedTask(pCmd);
-        break;
-
     default:
         break;
     }
@@ -415,33 +409,33 @@ void Dealer::procConnector(GenData* data) {
     ConnOption opt;
 
     MiscTool::bzero(&opt, sizeof(opt));
+    
+    m_director->beginSock(data);
     ret = m_center->onConnect(data, opt);
     if (0 == ret) {
-        m_director->beginSock(data, opt.m_rd_thresh,
+        m_director->activateSock(data, opt.m_rd_thresh,
             opt.m_wr_thresh, opt.m_delay); 
     } else {
-        m_director->closeData(data);
+        closeData(data);
     } 
+}
+
+void Dealer::closeData(GenData* data) {
+    int fd = m_center->getFd(data);
+    bool bOk = false;
+    
+    bOk = m_center->unreg(data); 
+    if (bOk) {
+        SockTool::closeSock(fd);
+    }
 }
 
 void Dealer::onAccept(GenData* listenData,
     int newFd, const SockAddr* addr) {
-    GenData* child = NULL;
-    int ret = 0;
-    AccptOption opt;
-    SockName name;
-    
-    MiscTool::bzero(&opt, sizeof(opt));
-    child = m_center->onNewSock(listenData, newFd, opt);
-    if (NULL != child) { 
-        ret = SockTool::addr2IP(&name, addr);
-        if (0 == ret) {
-            m_center->setAddr(child, name.m_ip, name.m_port); 
-        }
-        
-        m_director->beginSock(child, opt.m_rd_thresh,
-            opt.m_wr_thresh, opt.m_delay);
-    } else {
+    int ret = 0; 
+
+    ret = m_director->regSock(newFd, listenData, addr);
+    if (0 != ret) {
         SockTool::closeSock(newFd);
     } 
 }
@@ -465,29 +459,33 @@ void Dealer::procListener(GenData* listenData) {
         m_director->activate(ENUM_DIR_RECVER, listenData);
     } else if (ENUM_SOCK_RET_LIMIT == ret) {
         /* sleep to wait */
-        m_center->cancelTimer(ENUM_DIR_DEALER, listenData);
-        m_center->enableTimer(ENUM_DIR_DEALER, m_timer, listenData,
+        m_center->restartTimer(ENUM_DIR_DEALER, m_timer, listenData,
             ENUM_TIMER_EVENT_LISTENER_SLEEP,
             DEF_LISTENER_SLEEP_TICK);
     } else { 
         LOG_WARN("deal_listener| fd=%d| ret=%d| msg=deal close|", 
                 listenFd, ret);
         
-        detach(listenData, ENUM_STAT_ERROR); 
+        detach(listenData, ENUM_STAT_INVALID); 
     
-        m_director->notifyClose(listenData);
+        m_director->stopSock(listenData);
     }
-}
+} 
 
 void Dealer::cmdRemoveFd(NodeMsg* base) { 
-    int fd = -1;
     CmdComm* pCmd = NULL;
     GenData* data = NULL;
+    int fd = 0;
+    int port = 0;
+    char ip[DEF_IP_SIZE] = {0};
 
     pCmd = CmdUtil::getCmdBody<CmdComm>(base);
     fd = pCmd->m_fd;
 
-    LOG_DEBUG("dealer_remove_fd| fd=%d|", fd);
+    m_center->getAddr(fd, &port, ip, sizeof(ip));
+
+    LOG_INFO("dealer_remove_fd| fd=%d| ip=%s:%d|", 
+        fd, ip, port);
     
     if (exists(fd)) { 
         data = find(fd); 
@@ -495,7 +493,7 @@ void Dealer::cmdRemoveFd(NodeMsg* base) {
         detach(data, ENUM_STAT_INVALID); 
 
         m_center->onClose(data);
-        m_director->closeData(data);
+        closeData(data);
     }
 }
 
@@ -512,56 +510,4 @@ void Dealer::dealTimeoutCb(GenData* data) {
     }
 }
 
-static bool _sheduleDealerTask(long param1, 
-    long param2, TimerObj* obj) {
-    ManageCenter* center = (ManageCenter*)param1;
-    NodeMsg* base = (NodeMsg*)param2;
-    CmdSchedTask* body = NULL;
-    TimerFunc func = NULL;
-    long data = 0;
-    long data2 = 0;
-    bool bOk = false;
-    TimerObj* ele = NULL;
-
-    body = CmdUtil::getCmdBody<CmdSchedTask>(base);
-    func = body->func;
-    data = body->m_data;
-    data2 = body->m_data2;
-
-    bOk = func(data, data2);
-    if (bOk && 0 < obj->m_interval) {
-        return true;
-    } else {
-        ele = (TimerObj*)obj;
-        
-        center->freeTimer(ele);
-        NodeUtil::freeNode(base);
-
-        return false;
-    }
-}
-
-void Dealer::cmdSchedTask(NodeMsg* base) { 
-    NodeMsg* refCmd = NULL;
-    CmdSchedTask* body = NULL;
-    TimerObj* obj = NULL;
-    unsigned delay = 0;
-    unsigned interval = 0; 
-
-    body = CmdUtil::getCmdBody<CmdSchedTask>(base);
-    delay = body->m_delay;
-    interval = body->m_interval;
-
-    if (NULL != body->func) {
-        obj = m_center->allocTimer();
-
-        if (NULL != obj) {
-            refCmd = NodeUtil::refNode(base);
-            TickTimer::setTimerCb(obj, &_sheduleDealerTask, 
-                (long)m_center, (long)refCmd);
-  
-            m_timer->schedule(obj, delay, interval); 
-        }
-    } 
-}
 

@@ -50,17 +50,13 @@ enum EnumDealCb {
 
 enum EnumSockStat {
     ENUM_STAT_INVALID = 0,
-    ENUM_STAT_INIT,
     ENUM_STAT_IDLE,
     ENUM_STAT_BLOCKING,
     ENUM_STAT_READY,
     ENUM_STAT_FLOWCTL,
     ENUM_STAT_DISABLE,
-    ENUM_STAT_TIMEOUT,
-    ENUM_STAT_CLOSING,
-    ENUM_STAT_DELAY,
     
-    ENUM_STAT_ERROR 
+    ENUM_STAT_END 
 };
 
 enum EnumDir {
@@ -81,19 +77,12 @@ enum EnumSockCmd {
     ENUM_CMD_DELAY_FD,
     ENUM_CMD_UNDELAY_FD,
 
-    ENUM_CMD_SCHED_TASK,
-
     ENUM_CMD_END
 };
 
-struct TimerObj;
-
-typedef bool (*TimerFunc)(long, long);
-typedef bool (*TFunc)(long, long, TimerObj*);
-
 struct TimerObj {
     HList m_node; 
-    TFunc func;
+    TimerFunc func;
     long m_data;
     long m_data2;
     unsigned m_expire;
@@ -103,25 +92,6 @@ struct TimerObj {
 struct CmdComm {
     int m_fd;
 };
-
-struct CmdSchedTask {
-    TimerFunc func;
-    long m_data;
-    long m_data2;
-    unsigned m_delay; 
-    unsigned m_interval;
-};
-
-struct CmdSetFLowCtrl {
-    int m_dir;
-    int m_kps;
-};
-
-struct CmdSetTimeout {
-    int m_dir;
-    int m_timeout;
-}; 
-
 
 #endif
 

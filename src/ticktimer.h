@@ -3,6 +3,9 @@
 #include"llist.h"
 #include"sockdata.h"
 
+
+class Lock;
+
 class TickTimer {
     static const int DEF_TV_BITS = 8;
     static const int DEF_TV_SIZE = 1 << DEF_TV_BITS;
@@ -10,35 +13,36 @@ class TickTimer {
     
 public:
     TickTimer();
-    ~TickTimer();
+    ~TickTimer(); 
 
-    static void delTimer(TimerObj* ele);
-    
-    static TimerObj* allocObj();
-    static void freeObj(TimerObj* obj); 
-    static void initObj(TimerObj* ele); 
-    
-    static void setTimerCb(TimerObj* ele, 
-        TFunc cb, long data, long data2 = 0);
-
-    void schedule(TimerObj* ele, unsigned delay = 0,
+    void startTimer(TimerObj* ele, unsigned delay,
         unsigned interval = 0);
 
+    void restartTimer(TimerObj* ele, unsigned delay,
+        unsigned interval = 0);
+
+    void stopTimer(TimerObj* ele);
+    
     void run(unsigned tick);
     
     unsigned now() const {
         return m_now;
     } 
 
+    void setLock(Lock* lock);
+    
+    static void initObj(TimerObj* ele); 
+    
+    static void setTimerCb(TimerObj* ele, 
+        TimerFunc cb, long data, long data2 = 0); 
+
 private:    
-    void tick();
+    void tick(HRoot* list);
     void _schedule(TimerObj* ele, unsigned delay);
     
     void cascade(HRoot tv[], int index, int level);
     
     void doTimers(HRoot* list);
-
-    void doTimer(TimerObj* ele); 
 
     inline int index(unsigned time, int level) {
         return (time >> (DEF_TV_BITS * level)) & DEF_TV_MASK;
@@ -49,8 +53,12 @@ private:
 
         return time & mask;
     }
+
+    void lock();
+    void unlock();
     
 private:
+    Lock* m_lock;
     unsigned m_now;
     unsigned m_tick;
     HRoot m_tv1[DEF_TV_SIZE];
